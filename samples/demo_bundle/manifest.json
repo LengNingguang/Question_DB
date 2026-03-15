@@ -1,0 +1,13 @@
+﻿{
+  "bundle_name": "demo_bundle",
+  "run_label": "demo-import-001",
+  "paper": {
+    "paper_id": "CPHOS-2024-DEMO",
+    "year": 2024,
+    "stage": "mock",
+    "title": "CPHOS 2024 Demo Paper",
+    "source_pdf_path": "raw/demo/cphos_demo_paper.pdf",
+    "is_official": false,
+    "notes": "Sample bundle for repository verification"
+  }
+}

@@ -1,0 +1,11 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220" viewBox="0 0 480 220">
+  <rect width="480" height="220" fill="#fff9ef"/>
+  <line x1="80" y1="110" x2="170" y2="110" stroke="#222" stroke-width="4"/>
+  <rect x="170" y="85" width="90" height="50" fill="#fde68a" stroke="#92400e" stroke-width="3"/>
+  <line x1="260" y1="110" x2="330" y2="110" stroke="#222" stroke-width="4"/>
+  <path d="M330 110 q15 -35 30 0 q15 35 30 0" fill="none" stroke="#b91c1c" stroke-width="4"/>
+  <line x1="390" y1="110" x2="430" y2="110" stroke="#222" stroke-width="4"/>
+  <text x="24" y="32" font-size="20" font-family="Arial">Heating experiment circuit</text>
+  <text x="195" y="116" font-size="18" font-family="Arial">R</text>
+  <text x="344" y="86" font-size="18" font-family="Arial">coil</text>
+</svg>

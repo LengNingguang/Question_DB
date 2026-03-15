@@ -1,0 +1,25 @@
+﻿{
+  "question_id": "QB-2024-E-02",
+  "question_no": "2",
+  "category": "experiment",
+  "latex_body": "A simple pendulum is used to estimate gravitational acceleration g. Design the key measurement steps and derive the formula for g.",
+  "plain_text": "A simple pendulum is used to estimate gravitational acceleration g. Design the key measurement steps and derive the formula for g.",
+  "answer_latex": "T = 2\\pi\\sqrt{L/g},\\quad g = 4\\pi^2 L / T^2",
+  "answer_text": "Measure the pendulum length L and average period T over repeated oscillations, then compute g = 4*pi^2*L/T^2.",
+  "status": "published",
+  "source_pages": {
+    "start": 3,
+    "end": 4
+  },
+  "tags": ["experiment", "pendulum", "gravity"],
+  "assets": [
+    {
+      "asset_id": "ASSET-QB-2024-E-02-01",
+      "kind": "figure",
+      "file_path": "../../assets/demo/pendulum_setup.svg",
+      "sha256": "55EDB0913FDC5A2DC63F0C146B5B6470B3AFE24B4055CD0CB5AC193ED33BD049",
+      "caption": "Pendulum setup",
+      "sort_order": 1
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+﻿{
+  "question_id": "QB-2024-T-01",
+  "question_no": "1",
+  "category": "theory",
+  "latex_body": "A block of mass m slides down a rough incline of angle \\theta. Find the acceleration in terms of m, g, \\mu and \\theta.",
+  "plain_text": "A block of mass m slides down a rough incline of angle theta. Find the acceleration in terms of m, g, mu and theta.",
+  "answer_latex": "a = g(\\sin\\theta - \\mu \\cos\\theta)",
+  "answer_text": "The acceleration is a = g(sin(theta) - mu cos(theta)).",
+  "status": "reviewed",
+  "source_pages": {
+    "start": 2,
+    "end": 2
+  },
+  "tags": ["mechanics", "incline", "friction"],
+  "assets": []
+}

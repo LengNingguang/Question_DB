@@ -1,0 +1,25 @@
+﻿{
+  "question_id": "QB-2024-E-03",
+  "question_no": "3",
+  "category": "experiment",
+  "latex_body": "A resistor is heated by a current source. Describe how to estimate the dissipated energy and discuss the main experimental uncertainties.",
+  "plain_text": "A resistor is heated by a current source. Describe how to estimate the dissipated energy and discuss the main experimental uncertainties.",
+  "answer_latex": "E = I^2 R t = UIt",
+  "answer_text": "Use either E = I^2Rt or E = UIt, then discuss resistance drift, timing error and instrument precision.",
+  "status": "reviewed",
+  "source_pages": {
+    "start": 5,
+    "end": 5
+  },
+  "tags": ["experiment", "electricity", "energy"],
+  "assets": [
+    {
+      "asset_id": "ASSET-QB-2024-E-03-01",
+      "kind": "statement_image",
+      "file_path": "../../assets/demo/heating_circuit.svg",
+      "sha256": "109AA2CFC689D40B860893873B4CBAB67ADAD16BCE03B714109BBB8E4B2E65E9",
+      "caption": "Heating circuit sketch",
+      "sort_order": 1
+    }
+  ]
+}

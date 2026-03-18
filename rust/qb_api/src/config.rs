@@ -14,9 +14,9 @@ impl AppConfig {
             env::var("QB_DATABASE_URL").context("QB_DATABASE_URL is required for Rust API")?;
 
         let bind_addr = env::var("QB_BIND_ADDR")
-            .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
+            .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
             .parse()
-            .context("QB_BIND_ADDR must be a valid socket address, e.g. 0.0.0.0:8080")?;
+            .context("QB_BIND_ADDR must be a valid socket address, e.g. 127.0.0.1:8080")?;
 
         Ok(Self {
             database_url,
@@ -40,7 +40,7 @@ mod tests {
         }
 
         let cfg = AppConfig::from_env().expect("config should load");
-        assert_eq!(cfg.bind_addr.to_string(), "0.0.0.0:8080");
+        assert_eq!(cfg.bind_addr.to_string(), "127.0.0.1:8080");
         assert_eq!(
             cfg.database_url,
             "postgres://postgres:postgres@localhost/qb"

@@ -28,16 +28,44 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::AppConfig;
+    use std::env;
+
+    /// Guard that restores a single environment variable to its prior state on drop.
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prev = env::var(key).ok();
+            env::set_var(key, value);
+            EnvVarGuard { key, prev }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let prev = env::var(key).ok();
+            env::remove_var(key);
+            EnvVarGuard { key, prev }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(val) => env::set_var(self.key, val),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
 
     #[test]
     fn config_reads_env_and_uses_default_bind_addr() {
-        unsafe {
-            std::env::set_var(
-                "QB_DATABASE_URL",
-                "postgres://postgres:postgres@localhost/qb",
-            );
-            std::env::remove_var("QB_BIND_ADDR");
-        }
+        let _db_guard = EnvVarGuard::set(
+            "QB_DATABASE_URL",
+            "postgres://postgres:postgres@localhost/qb",
+        );
+        let _bind_guard = EnvVarGuard::remove("QB_BIND_ADDR");
 
         let cfg = AppConfig::from_env().expect("config should load");
         assert_eq!(cfg.bind_addr.to_string(), "127.0.0.1:8080");

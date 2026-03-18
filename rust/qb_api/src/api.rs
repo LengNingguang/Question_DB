@@ -1,6 +1,6 @@
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Serialize;
-use sqlx::PgPool;
+use sqlx::{query, PgPool};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -19,10 +19,15 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
-    let _pool = state.pool;
-    Json(HealthResponse {
+async fn health(State(state): State<AppState>) -> Result<Json<HealthResponse>, StatusCode> {
+    let pool = &state.pool;
+
+    if let Err(_err) = query("SELECT 1").execute(pool).await {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    Ok(Json(HealthResponse {
         status: "ok",
         service: "qb_api_rust",
-    })
+    }))
 }

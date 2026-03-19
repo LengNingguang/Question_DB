@@ -1,11 +1,9 @@
-mod api;
-mod config;
-mod db;
-
 use anyhow::Result;
-use api::{router, AppState};
-use config::AppConfig;
-use db::create_pool;
+use qb_api::{
+    api::{router, AppState},
+    config::AppConfig,
+    db::create_pool,
+};
 use tokio::net::TcpListener;
 
 #[tokio::main]

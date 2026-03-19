@@ -1,3 +1,5 @@
+//! Database connectivity helpers.
+
 use anyhow::{Context, Result};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 

@@ -1,9 +1,0 @@
-﻿<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220" viewBox="0 0 480 220">
-  <rect width="480" height="220" fill="#f7f7f7"/>
-  <line x1="240" y1="25" x2="240" y2="110" stroke="#222" stroke-width="3"/>
-  <circle cx="240" cy="150" r="40" fill="#d9e8ff" stroke="#1d4f91" stroke-width="3"/>
-  <line x1="180" y1="150" x2="300" y2="150" stroke="#777" stroke-dasharray="6 4" stroke-width="2"/>
-  <text x="28" y="32" font-size="20" font-family="Arial">Simple pendulum setup</text>
-  <text x="258" y="76" font-size="18" font-family="Arial">L</text>
-  <text x="250" y="156" font-size="18" font-family="Arial">m</text>
-</svg>

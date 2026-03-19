@@ -1,0 +1,3 @@
+[submodule "CPHOS-Latex"]
+	path = CPHOS-Latex
+	url = https://github.com/CPHOS/CPHOS-Latex.git

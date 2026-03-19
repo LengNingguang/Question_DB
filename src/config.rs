@@ -1,3 +1,5 @@
+//! Runtime configuration loaded from environment variables.
+
 use std::{env, net::SocketAddr};
 
 use anyhow::{Context, Result};

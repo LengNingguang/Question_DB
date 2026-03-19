@@ -1,35 +1,5 @@
-﻿__pycache__/
-*.py[cod]
-*.db-shm
-*.db-wal
-.pytest_cache/
-.mypy_cache/
-.venv/
-venv/
-dist/
-build/
+/target/
 *.log
-
-# Local and production database/runtime artifacts
-data/*.db
-data/*.sqlite
-data/*.sqlite3
-data/tmp*/
-!data/.gitkeep
-exports/*.jsonl
-exports/*.csv
-
-# Generated reports
-/docs/material_inventory.csv
-/docs/quality_report.json
-/docs/quality_report*.json
-
-# Environment and local deployment secrets
 .env
 .env.*
 !.env.example
-deploy/*.local.*
-deploy/*.secret.*
-
-# Rust build artifacts
-rust/target/

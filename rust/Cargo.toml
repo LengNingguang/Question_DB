@@ -1,3 +1,0 @@
-[workspace]
-members = ["qb_api"]
-resolver = "2"

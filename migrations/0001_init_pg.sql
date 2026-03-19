@@ -16,6 +16,11 @@ CREATE TABLE IF NOT EXISTS objects (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_objects_bucket_key ON objects(bucket, object_key);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_objects_hash_size ON objects(sha256, size_bytes);
 
+CREATE TABLE IF NOT EXISTS object_blobs (
+    object_id UUID PRIMARY KEY REFERENCES objects(object_id) ON DELETE CASCADE,
+    content BYTEA NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS papers (
     paper_id TEXT PRIMARY KEY,
     edition TEXT NOT NULL,
@@ -43,7 +48,8 @@ CREATE TABLE IF NOT EXISTS questions (
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (paper_id, paper_index)
+    UNIQUE (paper_id, paper_index),
+    UNIQUE (paper_id, question_no)
 );
 
 CREATE TABLE IF NOT EXISTS question_assets (
@@ -105,6 +111,20 @@ CREATE TABLE IF NOT EXISTS difficulty_scores (
     PRIMARY KEY (question_id, exam_session, method, method_version)
 );
 
+CREATE TABLE IF NOT EXISTS import_runs (
+    run_id BIGSERIAL PRIMARY KEY,
+    run_label TEXT NOT NULL,
+    bundle_path TEXT NOT NULL,
+    dry_run BOOLEAN NOT NULL,
+    status TEXT NOT NULL,
+    item_count INT NOT NULL DEFAULT 0,
+    warning_count INT NOT NULL DEFAULT 0,
+    error_count INT NOT NULL DEFAULT 0,
+    details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    started_at TIMESTAMPTZ NOT NULL,
+    finished_at TIMESTAMPTZ NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_questions_paper_id ON questions(paper_id);
 CREATE INDEX IF NOT EXISTS idx_questions_status ON questions(status);
 CREATE INDEX IF NOT EXISTS idx_questions_tags_json ON questions USING GIN (tags_json);
@@ -113,3 +133,4 @@ CREATE INDEX IF NOT EXISTS idx_question_stats_question_id ON question_stats(ques
 CREATE INDEX IF NOT EXISTS idx_question_stats_avg_score ON question_stats(avg_score);
 CREATE INDEX IF NOT EXISTS idx_score_workbooks_paper_id ON score_workbooks(paper_id);
 CREATE INDEX IF NOT EXISTS idx_score_workbooks_exam_session ON score_workbooks(exam_session);
+CREATE INDEX IF NOT EXISTS idx_import_runs_started_at ON import_runs(started_at);

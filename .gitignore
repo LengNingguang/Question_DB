@@ -3,4 +3,4 @@
 .env
 .env.*
 !.env.example
-/samples/generated/
+/samples

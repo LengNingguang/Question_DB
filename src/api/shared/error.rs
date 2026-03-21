@@ -17,6 +17,13 @@ pub(crate) struct ApiError {
 pub(crate) type ApiResult<T> = Result<Json<T>, ApiError>;
 
 impl ApiError {
+    pub(crate) fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
+    }
+
     pub(crate) fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,

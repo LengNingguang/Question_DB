@@ -1,61 +1,166 @@
 # CPHOS Question Bank
 
-Rust + Axum + PostgreSQL 题库服务，当前版本采用“独立题目上传 + 试卷显式组装”的核心模型。
+Rust + Axum + PostgreSQL 题库服务。当前版本的核心流程是：
+
+1. 上传单题 zip 压缩包导入题目
+2. 用一组有序题目引用创建试卷
 
 ## 项目架构
 
 ```text
 src/
 ├── api/
-│   ├── mod.rs        # 路由入口
-│   ├── handlers.rs   # HTTP 编排层
-│   ├── models.rs     # 请求/响应模型
-│   ├── queries.rs    # 查询规划与结果映射
-│   ├── imports.rs    # 题目源校验与导入
-│   ├── exports.rs    # 导出
-│   ├── quality.rs    # 质量检查
-│   ├── utils.rs      # 文件与文本工具
-│   └── error.rs      # API 错误响应
+│   ├── mod.rs
+│   ├── questions/
+│   │   ├── API.md
+│   │   ├── handlers.rs
+│   │   ├── imports.rs
+│   │   ├── models.rs
+│   │   └── queries.rs
+│   ├── papers/
+│   │   ├── API.md
+│   │   ├── handlers.rs
+│   │   └── models.rs
+│   ├── ops/
+│   │   ├── API.md
+│   │   ├── exports.rs
+│   │   ├── handlers.rs
+│   │   ├── models.rs
+│   │   └── quality.rs
+│   ├── system/
+│   │   ├── API.md
+│   │   └── handlers.rs
+│   └── shared/
+│       ├── error.rs
+│       └── utils.rs
 ├── config.rs
 ├── db.rs
 ├── lib.rs
 └── main.rs
 ```
 
-## 核心数据模型
+## 数据模型
 
-- `questions`：独立题目主数据，只保存题目自己的 metadata。
-- `question_assets`：题目资源引用。
-- `papers`：试卷 metadata。
-- `paper_questions`：试卷与题目的有序关联。
-- `objects` / `object_blobs`：题面 TeX、答案 TeX、图片等统一对象存储。
+- `objects`
+  单表保存任意上传文件的元数据与二进制内容。
+- `questions`
+  保存题目固定 metadata。
+- `question_files`
+  保存题目的 TeX 文件和资源文件引用。
+- `question_tags`
+  保存题目标签列表。
+- `question_difficulty_algorithms`
+  保存算法打分列表。
+- `papers`
+  保存试卷固定元数据。
+- `paper_questions`
+  保存试卷和题目的有序关联。
 
-关系上，题目先独立存在；试卷只是“按顺序引用题目”的容器。
+## 题目 zip 格式
+
+上传文件大小限制 20 MiB，使用 `multipart/form-data`，字段名是 `file`。
+
+zip 根目录下必须是标准题目录入包格式：
+
+```text
+question.zip
+├── problem.tex
+└── assets/
+    ├── figure1.png
+    └── ...
+```
+
+其中：
+
+- zip 根目录必须恰好有一个 `.tex` 文件
+- zip 根目录必须恰好有一个 `assets/` 目录
+- 除根目录 tex 和 `assets/` 下资源外，不允许额外文件或目录
+- tex 和 `assets/` 下的资源文件都会写入 `objects` 表
+- 题目 metadata 在上传时使用默认值：
+  - `category = "none"`
+  - `notes = ""`
+  - `tags = []`
+  - `status = "none"`
+  - `difficulty = {}`
+  - `created_at = NOW()`
 
 ## 核心 API
 
-### 题目导入
+### 上传题目
 
-- `POST /questions/imports/validate`
-- `POST /questions/imports/commit`
+`POST /questions`
 
-这里导入的是一个“题目源目录”，其中只包含：
+请求示例：
 
-- `manifest.json`
-- `questions/*.json`
-- `latex/...`
-- `assets/...`
+```bash
+curl -X POST http://127.0.0.1:8080/questions \
+  -F "file=@question.zip"
+```
 
-### 试卷组装
+### 更新题目 metadata
 
-- `POST /papers`
-- `PUT /papers/{paper_id}/questions`
+`PATCH /questions/{question_id}`
 
-推荐流程是：
+请求体示例：
 
-1. 先导入一批独立题目。
-2. 再创建试卷 metadata。
-3. 最后用有序 `question_refs` 绑定试卷包含哪些题。
+```json
+{
+  "category": "T",
+  "notes": "demo question",
+  "tags": ["optics", "mechanics"],
+  "status": "reviewed",
+  "difficulty": {
+    "human": 7,
+    "algorithm": {
+      "algo1": 6
+    },
+    "notes": "sample"
+  }
+}
+```
+
+说明：
+
+- 请求体支持部分更新
+- `notes` 传 `null` 或空串会被清空为 `""`
+- `tags` 传空数组会清空
+- `difficulty` 传 `{}` 会清空整个难度信息
+- `difficulty.human` 和 `difficulty.algorithm.*` 都要求在 `1..=10`
+- `category` 只能是 `none`、`T`、`E`
+- `status` 只能是 `none`、`reviewed`、`used`
+
+### 删除题目
+
+`DELETE /questions/{question_id}`
+
+### 创建试卷
+
+`POST /papers`
+
+请求体示例：
+
+```json
+{
+  "edition": "2026",
+  "paper_type": "regular",
+  "title": "CPHOS Mock Paper",
+  "notes": "demo",
+  "question_ids": [
+    "8db0d12e-2968-4ede-86d5-1dc5ff0a5d10",
+    "e21ed70d-cd18-45cc-89ab-2785d07f4de7"
+  ]
+}
+```
+
+题目顺序由 `question_ids` 数组顺序决定。
+
+### 更新试卷
+
+`PATCH /papers/{paper_id}`
+
+### 删除试卷
+
+`DELETE /papers/{paper_id}`
 
 ### 查询与运维
 
@@ -63,34 +168,8 @@ src/
 - `GET /papers/{paper_id}`
 - `GET /questions`
 - `GET /questions/{question_id}`
-- `GET /search`
 - `POST /exports/run`
 - `POST /quality-checks/run`
-
-## 样例生成
-
-静态 `samples` 已经不再作为主要维护对象，推荐直接生成。
-
-本仓库内置 [CPHOS-Latex](/home/be/Question_DB/CPHOS-Latex) 子项目，样例生成脚本会从它复制示例 TeX 和资源，生成一个可导入的题目源目录：
-
-```bash
-bash scripts/generate_samples.sh
-```
-
-默认输出到：
-
-- [samples/generated](/home/be/Question_DB/samples/generated)
-
-其中包含：
-
-- `manifest.json`
-- `questions/*.json`
-- `latex/questions/*.tex`
-- `assets/*`
-- `api/create_paper.json`
-- `api/replace_paper_questions.json`
-
-后两个 JSON 可以直接被 `curl --data-binary @file` 用来创建试卷和设置题目顺序。
 
 ## 启动
 
@@ -109,28 +188,12 @@ cargo run
 cargo test
 ```
 
-端到端测试会自动：
-
-1. 生成样例
-2. 启动 PostgreSQL
-3. 启动 API
-4. 调用 API 导入题目
-5. 调用 API 创建试卷并绑定题目
-6. 再查询和导出验证结果
+端到端脚本：
 
 ```bash
-bash scripts/test_full_flow.sh
+python3 scripts/test_full_flow.py
 ```
 
 ## 数据库格式
 
 表结构定义在 [0001_init_pg.sql](/home/be/Question_DB/migrations/0001_init_pg.sql)。
-
-核心表：
-
-- `objects` / `object_blobs`：统一对象元数据与二进制内容
-- `questions`：独立题目主数据
-- `question_assets`：题目资源
-- `papers`：试卷元数据
-- `paper_questions`：试卷与题目的有序关联
-- `import_runs`：导入审计

@@ -1,53 +1,55 @@
--- PostgreSQL initial schema for the question-first model.
+-- PostgreSQL initial schema for ZIP-uploaded questions and assembled papers.
 
 CREATE TABLE IF NOT EXISTS objects (
     object_id UUID PRIMARY KEY,
-    bucket TEXT NOT NULL,
-    object_key TEXT NOT NULL,
-    sha256 TEXT NOT NULL,
-    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+    file_name TEXT NOT NULL,
     mime_type TEXT,
-    storage_class TEXT NOT NULL DEFAULT 'hot',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_by TEXT,
-    encryption TEXT NOT NULL DEFAULT 'sse'
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS ux_objects_bucket_key ON objects(bucket, object_key);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_objects_hash_size ON objects(sha256, size_bytes);
-
-CREATE TABLE IF NOT EXISTS object_blobs (
-    object_id UUID PRIMARY KEY REFERENCES objects(object_id) ON DELETE CASCADE,
-    content BYTEA NOT NULL
+    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+    content BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS questions (
-    question_id TEXT PRIMARY KEY,
-    category TEXT NOT NULL,
-    question_tex_object_id UUID REFERENCES objects(object_id),
-    answer_tex_object_id UUID REFERENCES objects(object_id),
-    search_text TEXT,
-    status TEXT NOT NULL DEFAULT 'raw',
-    tags_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-    notes TEXT,
+    question_id UUID PRIMARY KEY,
+    source_tex_path TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'none' CHECK (category IN ('none', 'T', 'E')),
+    status TEXT NOT NULL DEFAULT 'none' CHECK (status IN ('none', 'reviewed', 'used')),
+    notes TEXT NOT NULL DEFAULT '',
+    difficulty_human INT CHECK (difficulty_human BETWEEN 1 AND 10),
+    difficulty_notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS question_assets (
-    asset_id TEXT PRIMARY KEY,
-    question_id TEXT NOT NULL REFERENCES questions(question_id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    object_id UUID NOT NULL REFERENCES objects(object_id),
-    caption TEXT,
-    sort_order INT NOT NULL DEFAULT 0,
+CREATE TABLE IF NOT EXISTS question_files (
+    question_file_id UUID PRIMARY KEY,
+    question_id UUID NOT NULL REFERENCES questions(question_id) ON DELETE CASCADE,
+    object_id UUID NOT NULL REFERENCES objects(object_id) ON DELETE CASCADE,
+    file_kind TEXT NOT NULL CHECK (file_kind IN ('tex', 'asset')),
+    file_path TEXT NOT NULL,
+    mime_type TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (question_id, kind, object_id)
+    UNIQUE (question_id, file_kind, file_path)
+);
+
+CREATE TABLE IF NOT EXISTS question_tags (
+    question_id UUID NOT NULL REFERENCES questions(question_id) ON DELETE CASCADE,
+    tag TEXT NOT NULL,
+    sort_order INT NOT NULL,
+    PRIMARY KEY (question_id, tag),
+    UNIQUE (question_id, sort_order)
+);
+
+CREATE TABLE IF NOT EXISTS question_difficulty_algorithms (
+    question_id UUID NOT NULL REFERENCES questions(question_id) ON DELETE CASCADE,
+    algorithm_tag TEXT NOT NULL,
+    score INT NOT NULL CHECK (score BETWEEN 1 AND 10),
+    PRIMARY KEY (question_id, algorithm_tag)
 );
 
 CREATE TABLE IF NOT EXISTS papers (
-    paper_id TEXT PRIMARY KEY,
-    edition TEXT NOT NULL,
+    paper_id UUID PRIMARY KEY,
+    edition TEXT,
     paper_type TEXT NOT NULL,
     title TEXT NOT NULL,
     notes TEXT,
@@ -56,36 +58,18 @@ CREATE TABLE IF NOT EXISTS papers (
 );
 
 CREATE TABLE IF NOT EXISTS paper_questions (
-    paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
-    question_id TEXT NOT NULL REFERENCES questions(question_id) ON DELETE CASCADE,
+    paper_id UUID NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+    question_id UUID NOT NULL REFERENCES questions(question_id) ON DELETE CASCADE,
     sort_order INT NOT NULL,
-    question_label TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (paper_id, question_id),
     UNIQUE (paper_id, sort_order)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_paper_questions_label
-    ON paper_questions (paper_id, question_label)
-    WHERE question_label IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS import_runs (
-    run_id BIGSERIAL PRIMARY KEY,
-    run_label TEXT NOT NULL,
-    bundle_path TEXT NOT NULL,
-    dry_run BOOLEAN NOT NULL,
-    status TEXT NOT NULL,
-    item_count INT NOT NULL DEFAULT 0,
-    warning_count INT NOT NULL DEFAULT 0,
-    error_count INT NOT NULL DEFAULT 0,
-    details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    started_at TIMESTAMPTZ NOT NULL,
-    finished_at TIMESTAMPTZ NOT NULL
-);
-
 CREATE INDEX IF NOT EXISTS idx_questions_status ON questions(status);
-CREATE INDEX IF NOT EXISTS idx_questions_tags_json ON questions USING GIN (tags_json);
-CREATE INDEX IF NOT EXISTS idx_question_assets_question_id ON question_assets(question_id);
+CREATE INDEX IF NOT EXISTS idx_question_files_question_id ON question_files(question_id);
+CREATE INDEX IF NOT EXISTS idx_question_tags_question_id ON question_tags(question_id);
+CREATE INDEX IF NOT EXISTS idx_question_difficulty_algorithms_question_id
+    ON question_difficulty_algorithms(question_id);
 CREATE INDEX IF NOT EXISTS idx_paper_questions_paper_id ON paper_questions(paper_id);
 CREATE INDEX IF NOT EXISTS idx_paper_questions_question_id ON paper_questions(question_id);
-CREATE INDEX IF NOT EXISTS idx_import_runs_started_at ON import_runs(started_at);

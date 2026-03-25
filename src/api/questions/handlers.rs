@@ -10,12 +10,12 @@ use uuid::Uuid;
 use super::{
     imports::{import_question_zip, MAX_UPLOAD_BYTES},
     models::{
-        QuestionDeleteResponse, QuestionDetail, QuestionImportResponse, QuestionPaperRef,
-        QuestionSummary, QuestionsParams, UpdateQuestionMetadataRequest,
+        QuestionDeleteResponse, QuestionDetail, QuestionDifficulty, QuestionImportResponse,
+        QuestionPaperRef, QuestionSummary, QuestionsParams, UpdateQuestionMetadataRequest,
     },
     queries::{
-        execute_questions_query, load_question_algorithms, load_question_files, load_question_tags,
-        map_question_detail, map_question_paper_ref, map_question_summary,
+        execute_questions_query, load_question_difficulties, load_question_files,
+        load_question_tags, map_question_detail, map_question_paper_ref, map_question_summary,
         validate_question_filters,
     },
 };
@@ -41,10 +41,10 @@ pub(crate) async fn list_questions(
         let tags = load_question_tags(&state.pool, &question_id)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let algorithms = load_question_algorithms(&state.pool, &question_id)
+        let difficulty = load_question_difficulties(&state.pool, &question_id)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        questions.push(map_question_summary(row, tags, algorithms));
+        questions.push(map_question_summary(row, tags, difficulty));
     }
 
     Ok(Json(questions))
@@ -67,6 +67,7 @@ pub(crate) async fn create_question(
 ) -> ApiResult<QuestionImportResponse> {
     let mut file_name = None;
     let mut description = None;
+    let mut difficulty = None;
     let mut bytes = Vec::new();
 
     while let Some(field) = multipart
@@ -94,6 +95,12 @@ pub(crate) async fn create_question(
                 })?;
                 description = Some(value);
             }
+            "difficulty" => {
+                let value = field.text().await.map_err(|err| {
+                    ApiError::bad_request(format!("read difficulty field failed: {err}"))
+                })?;
+                difficulty = Some(value);
+            }
             _ => {}
         }
     }
@@ -111,14 +118,33 @@ pub(crate) async fn create_question(
             normalize_bundle_description("description", &value)
                 .map_err(|err| ApiError::bad_request(err.to_string()))
         })?;
+    let difficulty = difficulty
+        .ok_or_else(|| {
+            ApiError::bad_request("multipart form must include a non-empty 'difficulty' field")
+        })
+        .and_then(|value| {
+            serde_json::from_str::<QuestionDifficulty>(&value)
+                .map_err(|err| ApiError::bad_request(format!("invalid difficulty field: {err}")))
+                .and_then(|difficulty| {
+                    difficulty
+                        .normalize()
+                        .map_err(|err| ApiError::bad_request(err.to_string()))
+                })
+        })?;
     if bytes.len() > MAX_UPLOAD_BYTES {
         return Err(ApiError::bad_request("uploaded zip exceeds 20 MiB limit"));
     }
 
     Ok(Json(
-        import_question_zip(&state.pool, file_name.as_deref(), &description, bytes)
-            .await
-            .map_err(ApiError::from)?,
+        import_question_zip(
+            &state.pool,
+            file_name.as_deref(),
+            &description,
+            &difficulty,
+            bytes,
+        )
+        .await
+        .map_err(ApiError::from)?,
     ))
 }
 
@@ -184,63 +210,23 @@ pub(crate) async fn update_question_metadata(
     }
 
     if let Some(difficulty) = &update.difficulty {
-        if difficulty.clear_all {
-            query(
-                "UPDATE questions SET difficulty_human = NULL, difficulty_notes = NULL, updated_at = NOW() WHERE question_id = $1::uuid",
-            )
+        query("DELETE FROM question_difficulties WHERE question_id = $1::uuid")
             .bind(&question_id)
             .execute(&mut *tx)
             .await
-            .context("clear question difficulty failed")?;
-            query("DELETE FROM question_difficulty_algorithms WHERE question_id = $1::uuid")
-                .bind(&question_id)
-                .execute(&mut *tx)
-                .await
-                .context("clear difficulty algorithms failed")?;
-        } else {
-            if let Some(human) = difficulty.human {
-                query(
-                    "UPDATE questions SET difficulty_human = $2, updated_at = NOW() WHERE question_id = $1::uuid",
-                )
-                .bind(&question_id)
-                .bind(human)
-                .execute(&mut *tx)
-                .await
-                .context("update difficulty human failed")?;
-            }
+            .context("replace question difficulties failed")?;
 
-            if let Some(notes) = &difficulty.notes {
-                query(
-                    "UPDATE questions SET difficulty_notes = $2, updated_at = NOW() WHERE question_id = $1::uuid",
-                )
-                .bind(&question_id)
-                .bind(notes.as_deref())
-                .execute(&mut *tx)
-                .await
-                .context("update difficulty notes failed")?;
-            }
-
-            if let Some(algorithm_scores) = &difficulty.algorithm {
-                query("DELETE FROM question_difficulty_algorithms WHERE question_id = $1::uuid")
-                    .bind(&question_id)
-                    .execute(&mut *tx)
-                    .await
-                    .context("replace difficulty algorithms failed")?;
-
-                for (algorithm_tag, score) in algorithm_scores {
-                    query(
-                        "INSERT INTO question_difficulty_algorithms (question_id, algorithm_tag, score) VALUES ($1::uuid, $2, $3)",
-                    )
-                    .bind(&question_id)
-                    .bind(algorithm_tag)
-                    .bind(*score)
-                    .execute(&mut *tx)
-                    .await
-                    .with_context(|| {
-                        format!("insert updated algorithm score failed: {algorithm_tag}")
-                    })?;
-                }
-            }
+        for (algorithm_tag, value) in difficulty {
+            query(
+                "INSERT INTO question_difficulties (question_id, algorithm_tag, score, notes) VALUES ($1::uuid, $2, $3, $4)",
+            )
+            .bind(&question_id)
+            .bind(algorithm_tag)
+            .bind(value.score)
+            .bind(value.notes.as_deref())
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("insert updated question difficulty failed: {algorithm_tag}"))?;
         }
 
         query("UPDATE questions SET updated_at = NOW() WHERE question_id = $1::uuid")
@@ -320,7 +306,7 @@ async fn fetch_question_detail(
     let row = query(
         r#"
         SELECT question_id::text AS question_id, source_tex_path, category, status,
-               COALESCE(description, '') AS description, difficulty_human, difficulty_notes,
+               COALESCE(description, '') AS description,
                to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
                to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at
         FROM questions
@@ -346,9 +332,9 @@ async fn fetch_question_detail(
     let tags = load_question_tags(&state.pool, question_id)
         .await
         .context("load question tags failed")?;
-    let algorithms = load_question_algorithms(&state.pool, question_id)
+    let difficulty = load_question_difficulties(&state.pool, question_id)
         .await
-        .context("load question algorithms failed")?;
+        .context("load question difficulties failed")?;
 
     let papers = query(
         r#"
@@ -371,7 +357,7 @@ async fn fetch_question_detail(
         row,
         tex_object_id,
         tags,
-        algorithms,
+        difficulty,
         assets,
         papers,
     ))

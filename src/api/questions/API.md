@@ -12,6 +12,10 @@
   - 支持中文
   - 不能包含 `/ \\ : * ? " < > |`
   - 不能是 `.`、`..`，也不能以 `.` 结尾
+- 必填字段：`difficulty`
+  - 传 JSON 字符串
+  - 必须至少包含 `human`
+  - 每个 tag 的值形如 `{ "score": 7, "notes": "sample" }`
 - 大小限制：20 MiB
 - zip 根目录必须包含且只包含：
   - 恰好一个 `.tex` 文件
@@ -20,7 +24,6 @@
   - `category = "none"`
   - `tags = []`
   - `status = "none"`
-  - `difficulty = {}`
   - `created_at = NOW()`
 
 成功响应：
@@ -46,10 +49,12 @@
 - `tags`: 字符串数组，会去重；空数组表示清空
 - `status`: `none` | `reviewed` | `used`
 - `difficulty`: 对象
-  - `human`: `1..=10`，传 `null` 清空
-  - `algorithm`: `{ "algo": 7 }`，传空对象清空全部算法分数
-  - `notes`: 字符串，传 `null` 或空串清空
-  - 传 `{}` 会清空整个 `difficulty`
+  - key 是 difficulty tag，例如 `human`、`heuristic`
+  - value 形如 `{ "score": 7, "notes": "sample" }`
+  - `score` 必须是 `1..=10`
+  - `notes` 可选；空串会规范化为 `null`
+  - 如果传了 `difficulty`，会整体替换整组 difficulty
+  - `difficulty` 必须至少包含 `human`
 
 成功时返回更新后的完整题目详情。
 
@@ -76,10 +81,18 @@
 - `paper_type`
 - `category`
 - `tag`
+- `difficulty_tag`
+- `difficulty_min`
+- `difficulty_max`
 - `q`
   关键词搜索，只会匹配 `description`
 - `limit`
 - `offset`
+
+说明：
+
+- `difficulty_min` / `difficulty_max` 需要和 `difficulty_tag` 一起使用
+- difficulty 过滤会匹配指定 tag 上的 score 范围
 
 ### `GET /questions/{question_id}`
 

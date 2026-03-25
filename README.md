@@ -49,8 +49,8 @@ src/
   保存题目的 TeX 文件和资源文件引用。
 - `question_tags`
   保存题目标签列表。
-- `question_difficulty_algorithms`
-  保存算法打分列表。
+- `question_difficulties`
+  保存每个 difficulty tag 的 `score` / `notes`。
 - `papers`
   保存试卷固定元数据。
 - `paper_questions`
@@ -77,13 +77,13 @@ question.zip
 - 除根目录 tex 和 `assets/` 下资源外，不允许额外文件或目录
 - tex 和 `assets/` 下的资源文件都会写入 `objects` 表
 - 上传题目时必须额外提供一个非空的 `description`
+- 上传题目时必须额外提供一个 `difficulty` JSON 字符串，且至少包含 `human`
 - `description` 支持中文，并可直接参与 `GET /questions?q=...` 的模糊匹配
 - `description` 会参与 bundle 目录命名，因此不能包含 `/ \\ : * ? " < > |`，不能是 `.`、`..`，也不能以 `.` 结尾
 - 题目 metadata 在上传时其余字段使用默认值：
   - `category = "none"`
   - `tags = []`
   - `status = "none"`
-  - `difficulty = {}`
   - `created_at = NOW()`
 
 ## 核心 API
@@ -97,6 +97,7 @@ question.zip
 ```bash
 curl -X POST http://127.0.0.1:8080/questions \
   -F "description=热学标定题" \
+  -F 'difficulty={"human":{"score":5,"notes":"baseline"}}' \
   -F "file=@question.zip"
 ```
 
@@ -113,11 +114,13 @@ curl -X POST http://127.0.0.1:8080/questions \
   "tags": ["optics", "mechanics"],
   "status": "reviewed",
   "difficulty": {
-    "human": 7,
-    "algorithm": {
-      "algo1": 6
+    "human": {
+      "score": 7,
+      "notes": "sample"
     },
-    "notes": "sample"
+    "algo1": {
+      "score": 6
+    }
   }
 }
 ```
@@ -127,8 +130,10 @@ curl -X POST http://127.0.0.1:8080/questions \
 - 请求体支持部分更新
 - `description` 如果出现在更新请求里，必须是非空字符串，并满足上面的文件名安全限制
 - `tags` 传空数组会清空
-- `difficulty` 传 `{}` 会清空整个难度信息
-- `difficulty.human` 和 `difficulty.algorithm.*` 都要求在 `1..=10`
+- `difficulty` 如果出现在更新请求里，会整体替换整组 difficulty tag
+- `difficulty` 必须至少包含 `human`
+- `difficulty.<tag>.score` 要求在 `1..=10`
+- `difficulty.<tag>.notes` 是可选字符串，空串会被规范化为 `null`
 - `category` 只能是 `none`、`T`、`E`
 - `status` 只能是 `none`、`reviewed`、`used`
 
@@ -215,6 +220,14 @@ curl -X POST http://127.0.0.1:8080/questions \
 - `POST /questions/bundles`
 - `POST /exports/run`
 - `POST /quality-checks/run`
+
+`GET /questions` 额外支持：
+
+- `difficulty_tag`
+- `difficulty_min`
+- `difficulty_max`
+
+其中 `difficulty_min` / `difficulty_max` 需要和 `difficulty_tag` 一起使用。
 
 ## 启动
 

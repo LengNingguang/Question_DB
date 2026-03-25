@@ -44,6 +44,12 @@ QUESTION_SPECS = [
         "tex_name": "mechanics.tex",
         "tex_body": "\\section{Mechanics calibration}\nA cart slides on an incline.\n",
         "create_description": "mechanics benchmark alpha",
+        "create_difficulty": {
+            "human": {
+                "score": 2,
+                "notes": "import baseline",
+            }
+        },
         "assets": {
             "assets/diagram.txt": "incline-figure",
             "assets/data.csv": "time,velocity\n0,0\n1,3\n",
@@ -54,9 +60,9 @@ QUESTION_SPECS = [
             "tags": ["mechanics", "kinematics"],
             "status": "reviewed",
             "difficulty": {
-                "human": 4,
-                "algorithm": {"heuristic": 5},
-                "notes": "warm-up",
+                "human": {"score": 4, "notes": "warm-up"},
+                "heuristic": {"score": 5, "notes": "fast estimate"},
+                "ml": {"score": 3},
             },
         },
     },
@@ -66,6 +72,12 @@ QUESTION_SPECS = [
         "tex_name": "optics.tex",
         "tex_body": "\\section{Optics setup}\nA lens forms an image on a screen.\n",
         "create_description": "optics bundle beta",
+        "create_difficulty": {
+            "human": {
+                "score": 6,
+                "notes": "import triage",
+            }
+        },
         "assets": {
             "assets/lens.txt": "thin-lens",
             "assets/ray-path.txt": "ray-diagram",
@@ -76,9 +88,10 @@ QUESTION_SPECS = [
             "tags": ["optics", "lenses"],
             "status": "used",
             "difficulty": {
-                "human": 7,
-                "algorithm": {"heuristic": 6, "ml": 8},
-                "notes": "competition-ready",
+                "human": {"score": 7, "notes": "competition-ready"},
+                "heuristic": {"score": 6, "notes": "geometry-heavy"},
+                "ml": {"score": 8, "notes": "vision model struggle"},
+                "symbolic": {"score": 9},
             },
         },
     },
@@ -88,6 +101,11 @@ QUESTION_SPECS = [
         "tex_name": "thermal.tex",
         "tex_body": "\\section{Thermal equilibration}\nTwo bodies exchange heat.\n",
         "create_description": "热学标定 gamma",
+        "create_difficulty": {
+            "human": {
+                "score": 5,
+            }
+        },
         "assets": {
             "assets/table.txt": "material,c\nCu,385\nAl,900\n",
             "assets/reference.txt": "thermal-reference",
@@ -98,9 +116,9 @@ QUESTION_SPECS = [
             "tags": ["thermal", "calorimetry"],
             "status": "none",
             "difficulty": {
-                "human": 5,
-                "algorithm": {"heuristic": 4},
-                "notes": "",
+                "human": {"score": 5, "notes": ""},
+                "heuristic": {"score": 4, "notes": "direct model"},
+                "simulator": {"score": 6},
             },
         },
     },
@@ -175,6 +193,10 @@ def parse_json(body: str):
     return json.loads(body) if body else None
 
 
+def question_ids_from_body(body: str) -> list[str]:
+    return [item["question_id"] for item in parse_json(body)]
+
+
 def normalize_headers(items) -> dict[str, str]:
     return {key.lower(): value for key, value in items}
 
@@ -189,6 +211,20 @@ def format_body(value) -> tuple[str, str]:
     if isinstance(value, (dict, list)):
         return "json", pretty_json(value)
     return "text", str(value)
+
+
+def assert_question_query(
+    label: str,
+    path: str,
+    expected_ids: list[str],
+) -> None:
+    _, body, _ = perform_request(label, 200, path=path)
+    actual_ids = question_ids_from_body(body)
+    ensure(
+        sorted(actual_ids) == sorted(expected_ids),
+        f"{label} should return {expected_ids}, got {actual_ids}",
+    )
+    validation_notes.append(f"{label} -> {actual_ids}")
 
 
 def append_request_log(
@@ -557,6 +593,7 @@ def summarize_sample_inputs() -> list[dict]:
                 "slug": spec["slug"],
                 "upload_file": str(SAMPLES_DIR / spec["zip_name"]),
                 "zip_entries": [spec["tex_name"], *spec["assets"].keys()],
+                "create_difficulty": spec["create_difficulty"],
                 "metadata_patch": spec["patch"],
             }
         )
@@ -669,10 +706,54 @@ def main() -> None:
             content_type="application/zip",
         )
         multipart_request(
+            "POST /questions missing difficulty",
+            400,
+            path="/questions",
+            text_fields={"description": QUESTION_SPECS[0]["create_description"]},
+            field_name="file",
+            file_path=zip_paths[0],
+            content_type="application/zip",
+        )
+        multipart_request(
             "POST /questions invalid description",
             400,
             path="/questions",
-            text_fields={"description": "bad/name"},
+            text_fields={
+                "description": "bad/name",
+                "difficulty": json.dumps(
+                    QUESTION_SPECS[0]["create_difficulty"], ensure_ascii=False
+                ),
+            },
+            field_name="file",
+            file_path=zip_paths[0],
+            content_type="application/zip",
+        )
+        multipart_request(
+            "POST /questions invalid difficulty missing human",
+            400,
+            path="/questions",
+            text_fields={
+                "description": QUESTION_SPECS[0]["create_description"],
+                "difficulty": json.dumps(
+                    {"heuristic": {"score": 5}},
+                    ensure_ascii=False,
+                ),
+            },
+            field_name="file",
+            file_path=zip_paths[0],
+            content_type="application/zip",
+        )
+        multipart_request(
+            "POST /questions invalid difficulty score",
+            400,
+            path="/questions",
+            text_fields={
+                "description": QUESTION_SPECS[0]["create_description"],
+                "difficulty": json.dumps(
+                    {"human": {"score": 11}},
+                    ensure_ascii=False,
+                ),
+            },
             field_name="file",
             file_path=zip_paths[0],
             content_type="application/zip",
@@ -682,7 +763,12 @@ def main() -> None:
                 f"POST /questions ({spec['slug']})",
                 200,
                 path="/questions",
-                text_fields={"description": spec["create_description"]},
+                text_fields={
+                    "description": spec["create_description"],
+                    "difficulty": json.dumps(
+                        spec["create_difficulty"], ensure_ascii=False
+                    ),
+                },
                 field_name="file",
                 file_path=zip_path,
                 content_type="application/zip",
@@ -703,50 +789,89 @@ def main() -> None:
                 payload=spec["patch"],
             )
 
+        json_request(
+            f"PATCH /questions/{question_by_slug['mechanics']} invalid difficulty",
+            400,
+            method="PATCH",
+            path=f"/questions/{question_by_slug['mechanics']}",
+            payload={"difficulty": {"heuristic": {"score": 5}}},
+        )
+
         _, body, _ = perform_request(
             "GET /questions",
             200,
             path="/questions?limit=10&offset=0",
         )
         ensure(len(parse_json(body)) == 3, "question list should contain three questions")
-
-        _, body, _ = perform_request(
-            "GET /questions?q=热学",
-            200,
-            path="/questions?q=%E7%83%AD%E5%AD%A6",
+        assert_question_query(
+            "GET /questions?q=热学&difficulty_tag=human&difficulty_min=5&difficulty_max=5",
+            "/questions?q=%E7%83%AD%E5%AD%A6&difficulty_tag=human&difficulty_min=5&difficulty_max=5",
+            [question_by_slug["thermal"]],
         )
-        ensure(question_by_slug["thermal"] in body, "Chinese description search should return thermal question")
-
-        _, body, _ = perform_request(
-            "GET /questions?category=T",
-            200,
-            path="/questions?category=T",
+        assert_question_query(
+            "GET /questions?category=T&tag=mechanics&difficulty_tag=human&difficulty_max=4",
+            "/questions?category=T&tag=mechanics&difficulty_tag=human&difficulty_max=4",
+            [question_by_slug["mechanics"]],
         )
-        ensure(question_by_slug["mechanics"] in body, "category filter should return mechanics question")
-
-        _, body, _ = perform_request(
-            "GET /questions?tag=optics",
-            200,
-            path="/questions?tag=optics",
+        assert_question_query(
+            "GET /questions?difficulty_tag=heuristic&difficulty_max=5",
+            "/questions?difficulty_tag=heuristic&difficulty_max=5",
+            [question_by_slug["mechanics"], question_by_slug["thermal"]],
         )
-        ensure(question_by_slug["optics"] in body, "tag filter should return optics question")
-
-        _, body, _ = perform_request(
-            "GET /questions?q=热学",
-            200,
-            path="/questions?q=%E7%83%AD%E5%AD%A6",
+        assert_question_query(
+            "GET /questions?tag=optics&difficulty_tag=symbolic&difficulty_min=8",
+            "/questions?tag=optics&difficulty_tag=symbolic&difficulty_min=8",
+            [question_by_slug["optics"]],
         )
-        ensure(question_by_slug["thermal"] in body, "search should return thermal question")
+        assert_question_query(
+            "GET /questions?difficulty_tag=ml&difficulty_min=8&tag=optics&category=E",
+            "/questions?difficulty_tag=ml&difficulty_min=8&tag=optics&category=E",
+            [question_by_slug["optics"]],
+        )
 
         perform_request(
+            "GET /questions invalid difficulty range without tag",
+            400,
+            path="/questions?difficulty_min=5",
+        )
+        perform_request(
+            "GET /questions invalid difficulty range order",
+            400,
+            path="/questions?difficulty_tag=human&difficulty_min=8&difficulty_max=3",
+        )
+
+        _, body, _ = perform_request(
             "GET /questions/{mechanics}",
             200,
             path=f"/questions/{question_by_slug['mechanics']}",
         )
-        perform_request(
+        mechanics_detail = parse_json(body)
+        ensure(
+            mechanics_detail["difficulty"]["human"]["score"] == 4,
+            "mechanics human difficulty should be updated to 4",
+        )
+        ensure(
+            mechanics_detail["difficulty"]["heuristic"]["notes"] == "fast estimate",
+            "mechanics heuristic notes should round-trip",
+        )
+
+        _, body, _ = perform_request(
             "GET /questions/{optics}",
             200,
             path=f"/questions/{question_by_slug['optics']}",
+        )
+        optics_detail = parse_json(body)
+        ensure(
+            optics_detail["difficulty"]["symbolic"]["score"] == 9,
+            "optics symbolic difficulty should be present",
+        )
+        ensure(
+            optics_detail["difficulty"]["ml"]["notes"] == "vision model struggle",
+            "optics ml difficulty notes should round-trip",
+        )
+
+        validation_notes.append(
+            "Question filters covered search, tag, category, difficulty tag, difficulty ranges, and invalid range validation."
         )
 
         print_step("[6/8] Create papers and validate bundle downloads")
@@ -848,12 +973,25 @@ def main() -> None:
             payload={"description": "bad/name"},
         )
 
-        _, body, _ = perform_request(
+        assert_question_query(
             "GET /questions?paper_id={paper_a}",
-            200,
-            path=f"/questions?paper_id={urllib.parse.quote(paper_a_id)}",
+            f"/questions?paper_id={urllib.parse.quote(paper_a_id)}",
+            [
+                question_by_slug["thermal"],
+                question_by_slug["mechanics"],
+                question_by_slug["optics"],
+            ],
         )
-        ensure(question_by_slug["thermal"] in body, "paper filter should include thermal question")
+        assert_question_query(
+            "GET /questions?paper_id={paper_a}&difficulty_tag=human&difficulty_min=5",
+            f"/questions?paper_id={urllib.parse.quote(paper_a_id)}&difficulty_tag=human&difficulty_min=5",
+            [question_by_slug["thermal"], question_by_slug["optics"]],
+        )
+        assert_question_query(
+            "GET /questions?paper_type=final&difficulty_tag=ml&difficulty_min=8&tag=optics",
+            "/questions?paper_type=final&difficulty_tag=ml&difficulty_min=8&tag=optics",
+            [question_by_slug["optics"]],
+        )
 
         question_bundle_path = DOWNLOADS_DIR / "questions_bundle.zip"
         question_manifest, question_names = binary_json_request(

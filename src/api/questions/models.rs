@@ -13,20 +13,18 @@ pub struct QuestionSourceRef {
     pub(crate) tex: String,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QuestionDifficulty {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) human: Option<i32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) algorithm: Vec<QuestionAlgorithmScore>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) notes: Option<String>,
+    #[serde(flatten)]
+    pub(crate) entries: BTreeMap<String, QuestionDifficultyValue>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct QuestionAlgorithmScore {
-    pub(crate) tag: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuestionDifficultyValue {
     pub(crate) score: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) notes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +78,9 @@ pub(crate) struct QuestionsParams {
     pub(crate) paper_type: Option<String>,
     pub(crate) category: Option<String>,
     pub(crate) tag: Option<String>,
+    pub(crate) difficulty_tag: Option<String>,
+    pub(crate) difficulty_min: Option<i32>,
+    pub(crate) difficulty_max: Option<i32>,
     pub(crate) q: Option<String>,
     pub(crate) limit: Option<i64>,
     pub(crate) offset: Option<i64>,
@@ -97,18 +98,7 @@ pub(crate) struct UpdateQuestionMetadataRequest {
     #[serde(default)]
     pub(crate) status: Option<String>,
     #[serde(default)]
-    pub(crate) difficulty: Option<QuestionDifficultyPatch>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct QuestionDifficultyPatch {
-    #[serde(default)]
-    pub(crate) human: Option<Option<i32>>,
-    #[serde(default)]
-    pub(crate) algorithm: Option<Option<BTreeMap<String, i32>>>,
-    #[serde(default)]
-    pub(crate) notes: Option<Option<String>>,
+    pub(crate) difficulty: Option<QuestionDifficulty>,
 }
 
 #[derive(Debug)]
@@ -117,16 +107,16 @@ pub(crate) struct NormalizedQuestionMetadataUpdate {
     pub(crate) description: Option<String>,
     pub(crate) tags: Option<Vec<String>>,
     pub(crate) status: Option<String>,
-    pub(crate) difficulty: Option<NormalizedQuestionDifficultyUpdate>,
+    pub(crate) difficulty: Option<NormalizedQuestionDifficulty>,
 }
 
-#[derive(Debug)]
-pub(crate) struct NormalizedQuestionDifficultyUpdate {
-    pub(crate) clear_all: bool,
-    pub(crate) human: Option<Option<i32>>,
-    pub(crate) algorithm: Option<BTreeMap<String, i32>>,
-    pub(crate) notes: Option<Option<String>>,
+#[derive(Debug, Clone)]
+pub(crate) struct NormalizedQuestionDifficultyValue {
+    pub(crate) score: i32,
+    pub(crate) notes: Option<String>,
 }
+
+pub(crate) type NormalizedQuestionDifficulty = BTreeMap<String, NormalizedQuestionDifficultyValue>;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct QuestionImportResponse {
@@ -184,7 +174,7 @@ impl UpdateQuestionMetadataRequest {
             .transpose()?;
         let difficulty = self
             .difficulty
-            .map(QuestionDifficultyPatch::normalize)
+            .map(QuestionDifficulty::normalize)
             .transpose()?;
 
         Ok(NormalizedQuestionMetadataUpdate {
@@ -197,44 +187,9 @@ impl UpdateQuestionMetadataRequest {
     }
 }
 
-impl QuestionDifficultyPatch {
-    fn normalize(self) -> Result<NormalizedQuestionDifficultyUpdate> {
-        let clear_all = self.human.is_none() && self.algorithm.is_none() && self.notes.is_none();
-
-        let human = self
-            .human
-            .map(|value| {
-                value
-                    .map(|score| {
-                        if !(1..=10).contains(&score) {
-                            bail!("difficulty.human must be an integer between 1 and 10");
-                        }
-                        Ok(score)
-                    })
-                    .transpose()
-            })
-            .transpose()?;
-
-        let algorithm = self
-            .algorithm
-            .map(|value| {
-                value
-                    .map(normalize_algorithm_scores)
-                    .transpose()
-                    .map(|scores| scores.unwrap_or_default())
-            })
-            .transpose()?;
-
-        let notes = self
-            .notes
-            .map(|value| value.and_then(normalize_optional_plaintext));
-
-        Ok(NormalizedQuestionDifficultyUpdate {
-            clear_all,
-            human,
-            algorithm,
-            notes,
-        })
+impl QuestionDifficulty {
+    pub(crate) fn normalize(self) -> Result<NormalizedQuestionDifficulty> {
+        normalize_difficulty_entries(self.entries)
     }
 }
 
@@ -280,18 +235,36 @@ fn normalize_tags(values: Vec<String>) -> Result<Vec<String>> {
     Ok(normalized)
 }
 
-fn normalize_algorithm_scores(values: BTreeMap<String, i32>) -> Result<BTreeMap<String, i32>> {
+fn normalize_difficulty_entries(
+    values: BTreeMap<String, QuestionDifficultyValue>,
+) -> Result<NormalizedQuestionDifficulty> {
     let mut normalized = BTreeMap::new();
 
-    for (name, score) in values {
+    for (name, value) in values {
         let tag = name.trim().to_string();
         if tag.is_empty() {
-            bail!("difficulty.algorithm keys must not be empty");
+            bail!("difficulty keys must not be empty");
         }
-        if !(1..=10).contains(&score) {
-            bail!("difficulty.algorithm.{tag} must be between 1 and 10");
+        if !(1..=10).contains(&value.score) {
+            bail!("difficulty.{tag}.score must be between 1 and 10");
         }
-        normalized.insert(tag, score);
+        let notes = value.notes.and_then(normalize_optional_plaintext);
+        if normalized
+            .insert(
+                tag.clone(),
+                NormalizedQuestionDifficultyValue {
+                    score: value.score,
+                    notes,
+                },
+            )
+            .is_some()
+        {
+            bail!("difficulty tags must be unique after trimming");
+        }
+    }
+
+    if !normalized.contains_key("human") {
+        bail!("difficulty must include a human entry");
     }
 
     Ok(normalized)
@@ -322,12 +295,32 @@ mod tests {
     }
 
     #[test]
-    fn update_request_allows_clearing_difficulty_with_empty_object() {
+    fn update_request_requires_human_difficulty() {
         let request: UpdateQuestionMetadataRequest =
-            serde_json::from_str(r#"{"difficulty":{}}"#).expect("json should parse");
+            serde_json::from_str(r#"{"difficulty":{"ml":{"score":8}}}"#)
+                .expect("json should parse");
+
+        assert!(request.normalize().is_err());
+    }
+
+    #[test]
+    fn update_request_normalizes_difficulty_notes() {
+        let request: UpdateQuestionMetadataRequest = serde_json::from_str(
+            r#"{
+                "difficulty":{
+                    " human ":{"score":7,"notes":"  calibrated  "},
+                    "heuristic":{"score":5,"notes":"   "}
+                }
+            }"#,
+        )
+        .expect("json should parse");
 
         let normalized = request.normalize().expect("request should normalize");
-        assert!(normalized.difficulty.expect("difficulty update").clear_all);
+        let difficulty = normalized.difficulty.expect("difficulty update");
+        assert_eq!(difficulty["human"].score, 7);
+        assert_eq!(difficulty["human"].notes.as_deref(), Some("calibrated"));
+        assert_eq!(difficulty["heuristic"].score, 5);
+        assert_eq!(difficulty["heuristic"].notes, None);
     }
 
     #[test]

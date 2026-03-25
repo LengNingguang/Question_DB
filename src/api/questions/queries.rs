@@ -1,11 +1,13 @@
 //! Query planning and row-to-response mapping for question endpoints.
 
+use std::collections::BTreeMap;
+
 use anyhow::{anyhow, Result};
 use sqlx::{postgres::PgRow, query, PgPool, Postgres, QueryBuilder, Row};
 
 use super::models::{
-    validate_question_category, QuestionAlgorithmScore, QuestionAssetRef, QuestionDetail,
-    QuestionDifficulty, QuestionPaperRef, QuestionSourceRef, QuestionSummary, QuestionsParams,
+    validate_question_category, QuestionAssetRef, QuestionDetail, QuestionDifficulty,
+    QuestionDifficultyValue, QuestionPaperRef, QuestionSourceRef, QuestionSummary, QuestionsParams,
 };
 use crate::api::papers::models::{PaperDetail, PaperQuestionSummary, PaperSummary};
 
@@ -34,8 +36,6 @@ impl QuestionsParams {
                    q.category,
                    q.status,
                    COALESCE(q.description, '') AS description,
-                   q.difficulty_human,
-                   q.difficulty_notes,
                    to_char(q.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') AS created_at,
                    to_char(q.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') AS updated_at
             FROM questions q
@@ -53,6 +53,21 @@ impl QuestionsParams {
                 .push_bind(tag)
                 .push(")");
             bind_count += 1;
+        }
+        if let Some(difficulty_tag) = &self.difficulty_tag {
+            builder
+                .push(" AND EXISTS (SELECT 1 FROM question_difficulties qd WHERE qd.question_id = q.question_id AND qd.algorithm_tag = ")
+                .push_bind(difficulty_tag);
+            bind_count += 1;
+            if let Some(difficulty_min) = self.difficulty_min {
+                builder.push(" AND qd.score >= ").push_bind(difficulty_min);
+                bind_count += 1;
+            }
+            if let Some(difficulty_max) = self.difficulty_max {
+                builder.push(" AND qd.score <= ").push_bind(difficulty_max);
+                bind_count += 1;
+            }
+            builder.push(")");
         }
         if let Some(paper_id) = &self.paper_id {
             builder
@@ -106,6 +121,37 @@ pub(crate) fn validate_question_filters(params: &QuestionsParams) -> Result<()> 
         validate_question_category(category)
             .map_err(|_| anyhow!("category must be one of: none, T, E"))?;
     }
+    if let Some(difficulty_tag) = &params.difficulty_tag {
+        if difficulty_tag.trim().is_empty() {
+            return Err(anyhow!("difficulty_tag must not be empty"));
+        }
+    }
+    if (params.difficulty_min.is_some() || params.difficulty_max.is_some())
+        && params.difficulty_tag.is_none()
+    {
+        return Err(anyhow!(
+            "difficulty_tag is required when difficulty_min or difficulty_max is provided"
+        ));
+    }
+    if let Some(difficulty_min) = params.difficulty_min {
+        if !(1..=10).contains(&difficulty_min) {
+            return Err(anyhow!("difficulty_min must be between 1 and 10"));
+        }
+    }
+    if let Some(difficulty_max) = params.difficulty_max {
+        if !(1..=10).contains(&difficulty_max) {
+            return Err(anyhow!("difficulty_max must be between 1 and 10"));
+        }
+    }
+    if let (Some(difficulty_min), Some(difficulty_max)) =
+        (params.difficulty_min, params.difficulty_max)
+    {
+        if difficulty_min > difficulty_max {
+            return Err(anyhow!(
+                "difficulty_min must be less than or equal to difficulty_max"
+            ));
+        }
+    }
     if let Some(q) = &params.q {
         if q.trim().is_empty() {
             return Err(anyhow!("q must not be empty"));
@@ -125,6 +171,15 @@ pub(crate) async fn execute_questions_query(
     }
     if let Some(tag) = &params.tag {
         query = query.bind(tag);
+    }
+    if let Some(difficulty_tag) = &params.difficulty_tag {
+        query = query.bind(difficulty_tag);
+    }
+    if let Some(difficulty_min) = params.difficulty_min {
+        query = query.bind(difficulty_min);
+    }
+    if let Some(difficulty_max) = params.difficulty_max {
+        query = query.bind(difficulty_max);
     }
     if let Some(paper_id) = &params.paper_id {
         query = query.bind(paper_id);
@@ -147,6 +202,9 @@ pub(crate) async fn execute_questions_query(
 pub(crate) fn count_question_binds(params: &QuestionsParams) -> usize {
     usize::from(params.category.is_some())
         + usize::from(params.tag.is_some())
+        + usize::from(params.difficulty_tag.is_some())
+        + params.difficulty_min.as_ref().map(|_| 1).unwrap_or(0)
+        + params.difficulty_max.as_ref().map(|_| 1).unwrap_or(0)
         + usize::from(params.paper_id.is_some())
         + usize::from(params.paper_type.is_some())
         + params.q.as_ref().map(|_| 1).unwrap_or(0)
@@ -168,23 +226,29 @@ pub(crate) async fn load_question_tags(
         })
 }
 
-pub(crate) async fn load_question_algorithms(
+pub(crate) async fn load_question_difficulties(
     pool: &PgPool,
     question_id: &str,
-) -> Result<Vec<QuestionAlgorithmScore>, sqlx::Error> {
+) -> Result<QuestionDifficulty, sqlx::Error> {
     query(
-        "SELECT algorithm_tag, score FROM question_difficulty_algorithms WHERE question_id = $1::uuid ORDER BY algorithm_tag",
+        "SELECT algorithm_tag, score, notes FROM question_difficulties WHERE question_id = $1::uuid ORDER BY algorithm_tag",
     )
     .bind(question_id)
     .fetch_all(pool)
     .await
-    .map(|rows| {
-        rows.into_iter()
-            .map(|row| QuestionAlgorithmScore {
-                tag: row.get("algorithm_tag"),
-                score: row.get("score"),
+    .map(|rows| QuestionDifficulty {
+        entries: rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get("algorithm_tag"),
+                    QuestionDifficultyValue {
+                        score: row.get("score"),
+                        notes: row.get("notes"),
+                    },
+                )
             })
-            .collect()
+            .collect::<BTreeMap<_, _>>(),
     })
 }
 
@@ -242,7 +306,7 @@ pub(crate) fn map_paper_question_summary(row: PgRow, tags: Vec<String>) -> Paper
 pub(crate) fn map_question_summary(
     row: PgRow,
     tags: Vec<String>,
-    algorithms: Vec<QuestionAlgorithmScore>,
+    difficulty: QuestionDifficulty,
 ) -> QuestionSummary {
     QuestionSummary {
         question_id: row.get("question_id"),
@@ -253,11 +317,7 @@ pub(crate) fn map_question_summary(
         status: row.get("status"),
         description: row.get("description"),
         tags,
-        difficulty: QuestionDifficulty {
-            human: row.get("difficulty_human"),
-            algorithm: algorithms,
-            notes: row.get("difficulty_notes"),
-        },
+        difficulty,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }
@@ -276,7 +336,7 @@ pub(crate) fn map_question_detail(
     row: PgRow,
     tex_object_id: String,
     tags: Vec<String>,
-    algorithms: Vec<QuestionAlgorithmScore>,
+    difficulty: QuestionDifficulty,
     assets: Vec<QuestionAssetRef>,
     papers: Vec<QuestionPaperRef>,
 ) -> QuestionDetail {
@@ -290,11 +350,7 @@ pub(crate) fn map_question_detail(
         status: row.get("status"),
         description: row.get("description"),
         tags,
-        difficulty: QuestionDifficulty {
-            human: row.get("difficulty_human"),
-            algorithm: algorithms,
-            notes: row.get("difficulty_notes"),
-        },
+        difficulty,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         assets,

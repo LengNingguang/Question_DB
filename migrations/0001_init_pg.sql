@@ -15,8 +15,6 @@ CREATE TABLE IF NOT EXISTS questions (
     category TEXT NOT NULL DEFAULT 'none' CHECK (category IN ('none', 'T', 'E')),
     status TEXT NOT NULL DEFAULT 'none' CHECK (status IN ('none', 'reviewed', 'used')),
     description TEXT NOT NULL CHECK (btrim(description) <> ''),
-    difficulty_human INT CHECK (difficulty_human BETWEEN 1 AND 10),
-    difficulty_notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -40,10 +38,11 @@ CREATE TABLE IF NOT EXISTS question_tags (
     UNIQUE (question_id, sort_order)
 );
 
-CREATE TABLE IF NOT EXISTS question_difficulty_algorithms (
+CREATE TABLE IF NOT EXISTS question_difficulties (
     question_id UUID NOT NULL REFERENCES questions(question_id) ON DELETE CASCADE,
     algorithm_tag TEXT NOT NULL,
     score INT NOT NULL CHECK (score BETWEEN 1 AND 10),
+    notes TEXT,
     PRIMARY KEY (question_id, algorithm_tag)
 );
 
@@ -68,7 +67,9 @@ CREATE TABLE IF NOT EXISTS paper_questions (
 CREATE INDEX IF NOT EXISTS idx_questions_status ON questions(status);
 CREATE INDEX IF NOT EXISTS idx_question_files_question_id ON question_files(question_id);
 CREATE INDEX IF NOT EXISTS idx_question_tags_question_id ON question_tags(question_id);
-CREATE INDEX IF NOT EXISTS idx_question_difficulty_algorithms_question_id
-    ON question_difficulty_algorithms(question_id);
+CREATE INDEX IF NOT EXISTS idx_question_difficulties_question_id
+    ON question_difficulties(question_id);
+CREATE INDEX IF NOT EXISTS idx_question_difficulties_algorithm_tag_score
+    ON question_difficulties(algorithm_tag, score);
 CREATE INDEX IF NOT EXISTS idx_paper_questions_paper_id ON paper_questions(paper_id);
 CREATE INDEX IF NOT EXISTS idx_paper_questions_question_id ON paper_questions(question_id);

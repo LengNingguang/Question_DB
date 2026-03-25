@@ -12,7 +12,7 @@ use sqlx::{query, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use super::models::QuestionImportResponse;
+use super::models::{NormalizedQuestionDifficulty, QuestionImportResponse};
 
 pub(crate) const MAX_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
 const MAX_TOTAL_UNCOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
@@ -33,6 +33,7 @@ pub(crate) async fn import_question_zip(
     pool: &PgPool,
     file_name: Option<&str>,
     description: &str,
+    difficulty: &NormalizedQuestionDifficulty,
     zip_bytes: Vec<u8>,
 ) -> Result<QuestionImportResponse> {
     if zip_bytes.is_empty() {
@@ -52,12 +53,10 @@ pub(crate) async fn import_question_zip(
     query(
         r#"
         INSERT INTO questions (
-            question_id, source_tex_path, category, status, description,
-            difficulty_human, difficulty_notes, created_at, updated_at
+            question_id, source_tex_path, category, status, description, created_at, updated_at
         )
         VALUES (
-            $1::uuid, $2, 'none', 'none',
-            $3, NULL, NULL, NOW(), NOW()
+            $1::uuid, $2, 'none', 'none', $3, NOW(), NOW()
         )
         "#,
     )
@@ -105,6 +104,19 @@ pub(crate) async fn import_question_zip(
             mime.as_deref(),
         )
         .await?;
+    }
+
+    for (algorithm_tag, value) in difficulty {
+        query(
+            "INSERT INTO question_difficulties (question_id, algorithm_tag, score, notes) VALUES ($1::uuid, $2, $3, $4)",
+        )
+        .bind(&question_id)
+        .bind(algorithm_tag)
+        .bind(value.score)
+        .bind(value.notes.as_deref())
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("insert question difficulty failed: {algorithm_tag}"))?;
     }
 
     tx.commit().await.context("commit question import failed")?;

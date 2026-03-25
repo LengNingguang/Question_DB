@@ -14,8 +14,8 @@ use sqlx::{query, PgPool, Row};
 use super::models::ExportFormat;
 use crate::api::{
     questions::{
-        models::{QuestionDifficulty, QuestionSourceRef},
-        queries::{load_question_algorithms, load_question_files, load_question_tags},
+        models::QuestionSourceRef,
+        queries::{load_question_difficulties, load_question_files, load_question_tags},
     },
     shared::utils::canonical_or_original,
 };
@@ -61,7 +61,6 @@ pub(crate) async fn export_jsonl(
         r#"
         SELECT question_id::text AS question_id, source_tex_path, category, status,
                COALESCE(description, '') AS description,
-               difficulty_human, difficulty_notes,
                to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
                to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at
         FROM questions
@@ -85,7 +84,7 @@ pub(crate) async fn export_jsonl(
         let tex_files = load_question_files(pool, &question_id, "tex").await?;
         let assets = load_question_files(pool, &question_id, "asset").await?;
         let tags = load_question_tags(pool, &question_id).await?;
-        let algorithms = load_question_algorithms(pool, &question_id).await?;
+        let difficulty = load_question_difficulties(pool, &question_id).await?;
         let tex_object_id = tex_files
             .first()
             .map(|file| file.object_id.clone())
@@ -100,11 +99,7 @@ pub(crate) async fn export_jsonl(
             "category": row.get::<String, _>("category"),
             "status": row.get::<String, _>("status"),
             "description": row.get::<String, _>("description"),
-            "difficulty": QuestionDifficulty {
-                human: row.get("difficulty_human"),
-                algorithm: algorithms,
-                notes: row.get("difficulty_notes"),
-            },
+            "difficulty": difficulty,
             "tags": tags,
             "assets": assets,
             "created_at": row.get::<String, _>("created_at"),
@@ -135,7 +130,6 @@ pub(crate) async fn export_csv(
         r#"
         SELECT question_id::text AS question_id, source_tex_path, category, status,
                COALESCE(description, '') AS description,
-               difficulty_human, difficulty_notes,
                to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
                to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at
         FROM questions
@@ -161,9 +155,7 @@ pub(crate) async fn export_csv(
         "category",
         "status",
         "description",
-        "difficulty_human",
-        "difficulty_algorithm",
-        "difficulty_notes",
+        "difficulty",
         "tags",
         "created_at",
         "updated_at",
@@ -174,7 +166,7 @@ pub(crate) async fn export_csv(
         let question_id: String = row.get("question_id");
         let tex_files = load_question_files(pool, &question_id, "tex").await?;
         let tags = load_question_tags(pool, &question_id).await?;
-        let algorithms = load_question_algorithms(pool, &question_id).await?;
+        let difficulty = load_question_difficulties(pool, &question_id).await?;
         let tex_object_id = tex_files
             .first()
             .map(|file| file.object_id.clone())
@@ -187,12 +179,7 @@ pub(crate) async fn export_csv(
             row.get::<String, _>("category"),
             row.get::<String, _>("status"),
             row.get::<String, _>("description"),
-            row.get::<Option<i32>, _>("difficulty_human")
-                .map(|value| value.to_string())
-                .unwrap_or_default(),
-            serde_json::to_string(&algorithms)?,
-            row.get::<Option<String>, _>("difficulty_notes")
-                .unwrap_or_default(),
+            serde_json::to_string(&difficulty)?,
             serde_json::to_string(&tags)?,
             row.get::<String, _>("created_at"),
             row.get::<String, _>("updated_at"),

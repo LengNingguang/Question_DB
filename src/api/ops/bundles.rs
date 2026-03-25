@@ -22,7 +22,7 @@ use crate::api::{
     questions::{
         models::{QuestionAssetRef, QuestionDetail, QuestionPaperRef},
         queries::{
-            load_question_algorithms, load_question_files, load_question_tags, map_paper_detail,
+            load_question_difficulties, load_question_files, load_question_tags, map_paper_detail,
             map_paper_question_summary, map_question_detail,
         },
     },
@@ -268,7 +268,7 @@ async fn load_question_bundle_data(pool: &PgPool, question_id: &str) -> Result<Q
     let row = query(
         r#"
         SELECT question_id::text AS question_id, source_tex_path, category, status,
-               COALESCE(description, '') AS description, difficulty_human, difficulty_notes,
+               COALESCE(description, '') AS description,
                to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at,
                to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at
         FROM questions
@@ -294,9 +294,9 @@ async fn load_question_bundle_data(pool: &PgPool, question_id: &str) -> Result<Q
     let tags = load_question_tags(pool, question_id)
         .await
         .with_context(|| format!("load question tags failed: {question_id}"))?;
-    let algorithms = load_question_algorithms(pool, question_id)
+    let difficulty = load_question_difficulties(pool, question_id)
         .await
-        .with_context(|| format!("load question algorithms failed: {question_id}"))?;
+        .with_context(|| format!("load question difficulties failed: {question_id}"))?;
 
     let papers = query(
         r#"
@@ -324,7 +324,7 @@ async fn load_question_bundle_data(pool: &PgPool, question_id: &str) -> Result<Q
     files.extend(assets.clone());
 
     Ok(QuestionBundleData {
-        metadata: map_question_detail(row, tex_object_id, tags, algorithms, assets, papers),
+        metadata: map_question_detail(row, tex_object_id, tags, difficulty, assets, papers),
         files,
     })
 }

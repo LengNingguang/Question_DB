@@ -71,6 +71,13 @@ pub(crate) struct PaperImportResponse {
     pub(crate) question_count: usize,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct PaperFileReplaceResponse {
+    pub(crate) paper_id: String,
+    pub(crate) file_name: String,
+    pub(crate) status: &'static str,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UpdatePaperRequest {

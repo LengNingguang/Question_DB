@@ -19,4 +19,8 @@ pub(crate) fn router() -> Router<super::AppState> {
                 .patch(handlers::update_question_metadata)
                 .delete(handlers::delete_question),
         )
+        .route(
+            "/questions/:question_id/file",
+            axum::routing::put(handlers::replace_question_file),
+        )
 }

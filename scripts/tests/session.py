@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import io
+import json
 import shutil
 import subprocess
 import urllib.error
@@ -195,7 +195,9 @@ class TestSession:
     ) -> tuple[int, str, dict[str, str]]:
         url = f"http://127.0.0.1:{API_PORT}{path}"
         request_headers = headers or {}
-        request = urllib.request.Request(url, data=body, method=method, headers=request_headers)
+        request = urllib.request.Request(
+            url, data=body, method=method, headers=request_headers
+        )
 
         try:
             with urllib.request.urlopen(request) as response:
@@ -250,14 +252,14 @@ class TestSession:
         label: str,
         expected_status: int,
         *,
+        method: str = "POST",
         path: str,
         text_fields: dict[str, str] | None,
-        field_name: str,
-        file_path: Path,
-        content_type: str,
+        field_name: str | None = None,
+        file_path: Path | None = None,
+        content_type: str | None = None,
     ) -> tuple[int, str, dict[str, str]]:
         boundary = f"----QBApiBoundary{uuid.uuid4().hex}"
-        file_bytes = file_path.read_bytes()
         body = bytearray()
         for name, value in (text_fields or {}).items():
             body.extend(
@@ -267,24 +269,34 @@ class TestSession:
                     f"{value}\r\n"
                 ).encode("utf-8")
             )
-        body.extend(
-            (
-                f"--{boundary}\r\n"
-                f'Content-Disposition: form-data; name="{field_name}"; filename="{file_path.name}"\r\n'
-                f"Content-Type: {content_type}\r\n\r\n"
-            ).encode("utf-8")
-        )
-        body.extend(file_bytes)
-        body.extend(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+        if file_path is not None:
+            if field_name is None or content_type is None:
+                raise ValueError(
+                    "field_name and content_type are required when file_path is provided"
+                )
+            file_bytes = file_path.read_bytes()
+            body.extend(
+                (
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="{field_name}"; filename="{file_path.name}"\r\n'
+                    f"Content-Type: {content_type}\r\n\r\n"
+                ).encode("utf-8")
+            )
+            body.extend(file_bytes)
+            body.extend(b"\r\n")
+        body.extend(f"--{boundary}--\r\n".encode("utf-8"))
 
         return self.perform_request(
             label,
             expected_status,
-            method="POST",
+            method=method,
             path=path,
             headers={"content-type": f"multipart/form-data; boundary={boundary}"},
             body=bytes(body),
-            request_body={"file": str(file_path), **(text_fields or {})},
+            request_body={
+                **({"file": str(file_path)} if file_path is not None else {}),
+                **(text_fields or {}),
+            },
         )
 
     def inspect_zip_file(self, file_path: Path) -> dict[str, Any]:
@@ -391,13 +403,24 @@ class TestSession:
 
             time.sleep(1)
         self.run_command(
-            ["docker", "exec", CONTAINER_NAME, "pg_isready", "-U", "postgres", "-d", "qb"]
+            [
+                "docker",
+                "exec",
+                CONTAINER_NAME,
+                "pg_isready",
+                "-U",
+                "postgres",
+                "-d",
+                "qb",
+            ]
         )
 
     def wait_for_api(self) -> None:
         for _ in range(60):
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{API_PORT}/health") as response:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{API_PORT}/health"
+                ) as response:
                     if response.status == 200:
                         return
             except Exception:
@@ -436,9 +459,21 @@ class TestSession:
         self.wait_for_postgres()
 
     def apply_migration(self) -> None:
-        migration_bytes = (self.root_dir / "migrations" / "0001_init_pg.sql").read_bytes()
+        migration_bytes = (
+            self.root_dir / "migrations" / "0001_init_pg.sql"
+        ).read_bytes()
         self.run_command(
-            ["docker", "exec", "-i", CONTAINER_NAME, "psql", "-U", "postgres", "-d", "qb"],
+            [
+                "docker",
+                "exec",
+                "-i",
+                CONTAINER_NAME,
+                "psql",
+                "-U",
+                "postgres",
+                "-d",
+                "qb",
+            ],
             input_bytes=migration_bytes,
         )
 

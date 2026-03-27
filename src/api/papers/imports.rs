@@ -4,11 +4,11 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use sqlx::{query, PgPool, Postgres, Transaction};
+use sqlx::{query, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use super::models::{NormalizedCreatePaperRequest, PaperImportResponse};
+use super::models::{NormalizedCreatePaperRequest, PaperFileReplaceResponse, PaperImportResponse};
 
 pub(crate) const MAX_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
 
@@ -80,6 +80,69 @@ pub(crate) async fn import_paper_zip(
         file_name: normalized_file_name,
         question_count: request.question_ids.len(),
         status: "imported",
+    })
+}
+
+pub(crate) async fn replace_paper_zip(
+    pool: &PgPool,
+    paper_id: &str,
+    file_name: Option<&str>,
+    zip_bytes: Vec<u8>,
+) -> Result<PaperFileReplaceResponse> {
+    if zip_bytes.is_empty() {
+        bail!("uploaded file is empty");
+    }
+    if zip_bytes.len() > MAX_UPLOAD_BYTES {
+        bail!("uploaded zip exceeds 20 MiB limit");
+    }
+
+    validate_uploaded_zip(&zip_bytes)?;
+
+    let normalized_file_name = normalize_upload_file_name(file_name);
+    let mut tx = pool
+        .begin()
+        .await
+        .context("begin paper file replace tx failed")?;
+
+    let previous_object_id = query(
+        "SELECT append_object_id::text AS append_object_id FROM papers WHERE paper_id = $1::uuid",
+    )
+    .bind(paper_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .context("load paper appendix reference failed")?
+    .map(|row| row.get::<String, _>("append_object_id"))
+    .ok_or_else(|| anyhow::anyhow!("paper not found: {paper_id}"))?;
+
+    let append_object_id = insert_object_tx(
+        &mut tx,
+        &normalized_file_name,
+        &zip_bytes,
+        Some("application/zip"),
+    )
+    .await?;
+
+    query("UPDATE papers SET append_object_id = $2::uuid, updated_at = NOW() WHERE paper_id = $1::uuid")
+        .bind(paper_id)
+        .bind(&append_object_id)
+        .execute(&mut *tx)
+        .await
+        .context("update paper appendix object failed")?;
+
+    query("DELETE FROM objects WHERE object_id = $1::uuid")
+        .bind(&previous_object_id)
+        .execute(&mut *tx)
+        .await
+        .context("delete previous paper appendix object failed")?;
+
+    tx.commit()
+        .await
+        .context("commit paper file replace failed")?;
+
+    Ok(PaperFileReplaceResponse {
+        paper_id: paper_id.to_string(),
+        file_name: normalized_file_name,
+        status: "replaced",
     })
 }
 

@@ -127,6 +127,15 @@ pub(crate) struct QuestionImportResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub(crate) struct QuestionFileReplaceResponse {
+    pub(crate) question_id: String,
+    pub(crate) file_name: String,
+    pub(crate) source_tex_path: String,
+    pub(crate) imported_assets: usize,
+    pub(crate) status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 pub(crate) struct QuestionDeleteResponse {
     pub(crate) question_id: String,
     pub(crate) status: &'static str,

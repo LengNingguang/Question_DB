@@ -58,6 +58,39 @@
 
 成功时返回更新后的完整题目详情。
 
+### `PUT /questions/{question_id}/file`
+
+使用 `multipart/form-data` 覆盖题目的当前 zip 文件内容，只更新文件，不修改 metadata。
+
+- 字段名：`file`
+- 大小限制：20 MiB
+- zip 根目录必须包含且只包含：
+  - 恰好一个 `.tex` 文件
+  - 恰好一个 `assets/` 目录
+- 成功后会：
+  - 删除题目当前关联的 tex / asset 文件对象
+  - 写入新 zip 中的 tex / asset 文件
+  - 更新 `source_tex_path`
+  - 更新 `updated_at`
+- 原有 metadata 会保留：
+  - `category`
+  - `description`
+  - `tags`
+  - `status`
+  - `difficulty`
+
+成功响应：
+
+```json
+{
+  "question_id": "uuid",
+  "file_name": "question_v2.zip",
+  "source_tex_path": "main.tex",
+  "imported_assets": 3,
+  "status": "replaced"
+}
+```
+
 ### `DELETE /questions/{question_id}`
 
 删除题目。

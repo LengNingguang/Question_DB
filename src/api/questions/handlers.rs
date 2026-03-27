@@ -8,10 +8,11 @@ use sqlx::{query, Row};
 use uuid::Uuid;
 
 use super::{
-    imports::{import_question_zip, MAX_UPLOAD_BYTES},
+    imports::{import_question_zip, replace_question_zip, MAX_UPLOAD_BYTES},
     models::{
-        QuestionDeleteResponse, QuestionDetail, QuestionDifficulty, QuestionImportResponse,
-        QuestionPaperRef, QuestionSummary, QuestionsParams, UpdateQuestionMetadataRequest,
+        QuestionDeleteResponse, QuestionDetail, QuestionDifficulty, QuestionFileReplaceResponse,
+        QuestionImportResponse, QuestionPaperRef, QuestionSummary, QuestionsParams,
+        UpdateQuestionMetadataRequest,
     },
     queries::{
         execute_questions_query, load_question_difficulties, load_question_files,
@@ -145,6 +146,31 @@ pub(crate) async fn create_question(
         )
         .await
         .map_err(ApiError::from)?,
+    ))
+}
+
+pub(crate) async fn replace_question_file(
+    AxumPath(question_id): AxumPath<String>,
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> ApiResult<QuestionFileReplaceResponse> {
+    Uuid::parse_str(&question_id)
+        .map_err(|_| ApiError::bad_request(format!("invalid question_id: {question_id}")))?;
+
+    let (file_name, bytes) = read_uploaded_file_from_multipart(&mut multipart).await?;
+    if bytes.is_empty() {
+        return Err(ApiError::bad_request(
+            "multipart form must include a non-empty 'file' field",
+        ));
+    }
+    if bytes.len() > MAX_UPLOAD_BYTES {
+        return Err(ApiError::bad_request("uploaded zip exceeds 20 MiB limit"));
+    }
+
+    Ok(Json(
+        replace_question_zip(&state.pool, &question_id, file_name.as_deref(), bytes)
+            .await
+            .map_err(map_question_file_replace_error)?,
     ))
 }
 
@@ -368,5 +394,54 @@ fn map_question_detail_error(err: anyhow::Error) -> StatusCode {
         StatusCode::NOT_FOUND
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
+async fn read_uploaded_file_from_multipart(
+    multipart: &mut Multipart,
+) -> Result<(Option<String>, Vec<u8>), ApiError> {
+    let mut file_name = None;
+    let mut bytes = Vec::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| ApiError::bad_request(format!("read multipart field failed: {err}")))?
+    {
+        if field.name() != Some("file") {
+            continue;
+        }
+
+        file_name = field.file_name().map(str::to_string);
+        bytes = field
+            .bytes()
+            .await
+            .map_err(|err| ApiError::bad_request(format!("read uploaded file failed: {err}")))?
+            .to_vec();
+    }
+
+    Ok((file_name, bytes))
+}
+
+fn map_question_file_replace_error(err: anyhow::Error) -> ApiError {
+    let message = err.to_string();
+    if message.starts_with("question not found:") {
+        ApiError {
+            status: StatusCode::NOT_FOUND,
+            message,
+        }
+    } else if message.contains("uploaded file is empty")
+        || message.contains("uploaded zip exceeds")
+        || message.contains("open zip archive failed")
+        || message.contains("zip expands beyond the allowed uncompressed size")
+        || message.contains("zip entry")
+        || message.contains("zip root")
+        || message.contains("unsafe path")
+        || message.contains("all non-root files must be inside")
+        || message.contains("unexpected file")
+    {
+        ApiError::bad_request(message)
+    } else {
+        ApiError::from(err)
     }
 }

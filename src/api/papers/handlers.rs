@@ -10,10 +10,10 @@ use sqlx::{query, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
 use super::{
-    imports::{import_paper_zip, MAX_UPLOAD_BYTES},
+    imports::{import_paper_zip, replace_paper_zip, MAX_UPLOAD_BYTES},
     models::{
-        CreatePaperRequest, PaperDeleteResponse, PaperDetail, PaperImportResponse, PapersParams,
-        UpdatePaperRequest,
+        CreatePaperRequest, PaperDeleteResponse, PaperDetail, PaperFileReplaceResponse,
+        PaperImportResponse, PapersParams, UpdatePaperRequest,
     },
     queries::{execute_papers_query, validate_and_build_papers_query},
 };
@@ -130,6 +130,50 @@ pub(crate) async fn create_paper(
         import_paper_zip(&state.pool, file_name.as_deref(), &request, bytes)
             .await
             .map_err(map_paper_create_error)?,
+    ))
+}
+
+pub(crate) async fn replace_paper_file(
+    AxumPath(paper_id): AxumPath<String>,
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> ApiResult<PaperFileReplaceResponse> {
+    Uuid::parse_str(&paper_id)
+        .map_err(|_| ApiError::bad_request(format!("invalid paper_id: {paper_id}")))?;
+
+    let mut file_name = None;
+    let mut bytes = Vec::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| ApiError::bad_request(format!("read multipart field failed: {err}")))?
+    {
+        if field.name() != Some("file") {
+            continue;
+        }
+
+        file_name = field.file_name().map(str::to_string);
+        bytes = field
+            .bytes()
+            .await
+            .map_err(|err| ApiError::bad_request(format!("read uploaded file failed: {err}")))?
+            .to_vec();
+    }
+
+    if bytes.is_empty() {
+        return Err(ApiError::bad_request(
+            "multipart form must include a non-empty 'file' field",
+        ));
+    }
+    if bytes.len() > MAX_UPLOAD_BYTES {
+        return Err(ApiError::bad_request("uploaded zip exceeds 20 MiB limit"));
+    }
+
+    Ok(Json(
+        replace_paper_zip(&state.pool, &paper_id, file_name.as_deref(), bytes)
+            .await
+            .map_err(map_paper_file_replace_error)?,
     ))
 }
 
@@ -510,6 +554,23 @@ fn map_paper_detail_status(err: ApiError) -> StatusCode {
 fn map_paper_create_error(err: anyhow::Error) -> ApiError {
     let message = err.to_string();
     if message.contains("uploaded file is empty")
+        || message.contains("uploaded zip exceeds")
+        || message.contains("open zip archive failed")
+    {
+        ApiError::bad_request(message)
+    } else {
+        ApiError::from(err)
+    }
+}
+
+fn map_paper_file_replace_error(err: anyhow::Error) -> ApiError {
+    let message = err.to_string();
+    if message.starts_with("paper not found:") {
+        ApiError {
+            status: StatusCode::NOT_FOUND,
+            message,
+        }
+    } else if message.contains("uploaded file is empty")
         || message.contains("uploaded zip exceeds")
         || message.contains("open zip archive failed")
     {

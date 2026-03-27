@@ -5,6 +5,7 @@ import json
 import signal
 import traceback
 import urllib.parse
+import zipfile
 
 from .fixtures import (
     RealQuestionFixture,
@@ -14,7 +15,7 @@ from .fixtures import (
     build_sample_question_zips,
 )
 from .session import TestSession, parse_json, question_ids_from_body
-from .specs import PAPER_APPENDIX_SPECS, QUESTION_SPECS
+from .specs import QUESTION_SPECS
 from .validators import validate_paper_bundle, validate_question_bundle
 
 
@@ -36,6 +37,7 @@ def assert_question_query(
 def upload_and_patch_synthetic_questions(
     session: TestSession,
     zip_paths: list,
+    appendix_paths: dict[str, object],
 ) -> tuple[list[str], dict[str, str]]:
     question_ids: list[str] = []
     question_by_slug: dict[str, str] = {}
@@ -235,7 +237,182 @@ def upload_and_patch_synthetic_questions(
         f"Saved synthetic question bundle zip to {question_bundle_path}."
     )
 
+    exercise_question_file_replacement(
+        session,
+        zip_paths,
+        appendix_paths,
+        question_by_slug,
+    )
+
     return question_ids, question_by_slug
+
+
+def exercise_question_file_replacement(
+    session: TestSession,
+    zip_paths: list,
+    appendix_paths: dict[str, object],
+    question_by_slug: dict[str, str],
+) -> None:
+    mechanics_id = question_by_slug["mechanics"]
+    original_spec = QUESTION_SPECS[0]
+    replacement_spec = QUESTION_SPECS[1]
+    replacement_zip_path = zip_paths[1]
+
+    _, body, _ = session.perform_request(
+        "GET /questions/{mechanics} before file replace",
+        200,
+        path=f"/questions/{mechanics_id}",
+    )
+    original_detail = parse_json(body)
+
+    session.multipart_request(
+        "PUT /questions/{invalid}/file",
+        400,
+        method="PUT",
+        path="/questions/not-a-uuid/file",
+        text_fields=None,
+        field_name="file",
+        file_path=replacement_zip_path,
+        content_type="application/zip",
+    )
+    session.multipart_request(
+        "PUT /questions/{missing}/file",
+        404,
+        method="PUT",
+        path="/questions/550e8400-e29b-41d4-a716-446655440000/file",
+        text_fields=None,
+        field_name="file",
+        file_path=replacement_zip_path,
+        content_type="application/zip",
+    )
+    session.multipart_request(
+        "PUT /questions/{mechanics}/file missing file",
+        400,
+        method="PUT",
+        path=f"/questions/{mechanics_id}/file",
+        text_fields=None,
+    )
+    session.multipart_request(
+        "PUT /questions/{mechanics}/file invalid zip",
+        400,
+        method="PUT",
+        path=f"/questions/{mechanics_id}/file",
+        text_fields=None,
+        field_name="file",
+        file_path=session.invalid_paper_upload_path,
+        content_type="application/zip",
+    )
+    session.multipart_request(
+        "PUT /questions/{mechanics}/file invalid layout",
+        400,
+        method="PUT",
+        path=f"/questions/{mechanics_id}/file",
+        text_fields=None,
+        field_name="file",
+        file_path=appendix_paths["mock-a"],
+        content_type="application/zip",
+    )
+
+    _, body, _ = session.multipart_request(
+        "PUT /questions/{mechanics}/file",
+        200,
+        method="PUT",
+        path=f"/questions/{mechanics_id}/file",
+        text_fields=None,
+        field_name="file",
+        file_path=replacement_zip_path,
+        content_type="application/zip",
+    )
+    replace_response = parse_json(body)
+    session.ensure(
+        replace_response["status"] == "replaced",
+        "question file replace should report replaced",
+    )
+    session.ensure(
+        replace_response["file_name"] == replacement_zip_path.name,
+        "question file replace should echo the uploaded file name",
+    )
+    session.ensure(
+        replace_response["source_tex_path"] == replacement_spec["tex_name"],
+        "question file replace should report the replacement tex path",
+    )
+    session.ensure(
+        replace_response["imported_assets"] == len(replacement_spec["assets"]),
+        "question file replace should report the replacement asset count",
+    )
+
+    _, body, _ = session.perform_request(
+        "GET /questions/{mechanics} after file replace",
+        200,
+        path=f"/questions/{mechanics_id}",
+    )
+    replaced_detail = parse_json(body)
+    session.ensure(
+        replaced_detail["tex_object_id"] != original_detail["tex_object_id"],
+        "question file replace should swap the tex object id",
+    )
+    session.ensure(
+        replaced_detail["source"]["tex"] == replacement_spec["tex_name"],
+        "question detail should expose the replacement tex path",
+    )
+    session.ensure(
+        [asset["path"] for asset in replaced_detail["assets"]]
+        == sorted(replacement_spec["assets"].keys()),
+        "question detail should expose the replacement asset paths",
+    )
+    session.ensure(
+        replaced_detail["category"] == original_spec["patch"]["category"],
+        "question file replace should preserve category metadata",
+    )
+    session.ensure(
+        replaced_detail["status"] == original_spec["patch"]["status"],
+        "question file replace should preserve status metadata",
+    )
+    session.ensure(
+        replaced_detail["description"] == original_spec["patch"]["description"],
+        "question file replace should preserve description metadata",
+    )
+    session.ensure(
+        replaced_detail["tags"] == original_spec["patch"]["tags"],
+        "question file replace should preserve tags metadata",
+    )
+
+    bundle_path = session.downloads_dir / "questions_bundle_replaced_mechanics.zip"
+    manifest, names = session.binary_json_request(
+        "POST /questions/bundles (replaced mechanics)",
+        200,
+        path="/questions/bundles",
+        payload={"question_ids": [mechanics_id]},
+        output_path=bundle_path,
+    )
+    validate_question_bundle(manifest, names, [mechanics_id], session.ensure)
+
+    directory = manifest["questions"][0]["directory"]
+    replacement_tex_path = f"{directory}/{replacement_spec['tex_name']}"
+    session.ensure(
+        replacement_tex_path in names,
+        "question bundle should include the replacement tex file",
+    )
+    session.ensure(
+        f"{directory}/{original_spec['tex_name']}" not in names,
+        "question bundle should no longer include the original tex file",
+    )
+    for asset_path in replacement_spec["assets"].keys():
+        session.ensure(
+            f"{directory}/{asset_path}" in names,
+            "question bundle should include every replacement asset",
+        )
+
+    with zipfile.ZipFile(bundle_path, "r") as archive:
+        replacement_tex = archive.read(replacement_tex_path).decode("utf-8")
+    session.ensure(
+        "Optics setup" in replacement_tex,
+        "question bundle should serve the replacement tex content",
+    )
+
+    session.validation_notes.append(
+        "Question file replacement API covered invalid id, missing file, invalid zip, invalid layout, detail refresh, and bundle round-trip."
+    )
 
 
 def upload_real_questions(
@@ -337,6 +514,77 @@ def upload_real_experiment_questions(
         tag="real-exp-batch",
         label_prefix="real-experiment",
     )
+
+
+def exercise_paper_file_replacement(
+    session: TestSession,
+    appendix_paths: dict[str, object],
+    paper_id: str,
+) -> object:
+    replacement_path = appendix_paths["mock-b"]
+
+    session.multipart_request(
+        "PUT /papers/{invalid}/file",
+        400,
+        method="PUT",
+        path="/papers/not-a-uuid/file",
+        text_fields=None,
+        field_name="file",
+        file_path=replacement_path,
+        content_type="application/zip",
+    )
+    session.multipart_request(
+        "PUT /papers/{missing}/file",
+        404,
+        method="PUT",
+        path="/papers/550e8400-e29b-41d4-a716-446655440000/file",
+        text_fields=None,
+        field_name="file",
+        file_path=replacement_path,
+        content_type="application/zip",
+    )
+    session.multipart_request(
+        "PUT /papers/{paper}/file missing file",
+        400,
+        method="PUT",
+        path=f"/papers/{paper_id}/file",
+        text_fields=None,
+    )
+    session.multipart_request(
+        "PUT /papers/{paper}/file invalid zip",
+        400,
+        method="PUT",
+        path=f"/papers/{paper_id}/file",
+        text_fields=None,
+        field_name="file",
+        file_path=session.invalid_paper_upload_path,
+        content_type="application/zip",
+    )
+
+    _, body, _ = session.multipart_request(
+        "PUT /papers/{paper}/file",
+        200,
+        method="PUT",
+        path=f"/papers/{paper_id}/file",
+        text_fields=None,
+        field_name="file",
+        file_path=replacement_path,
+        content_type="application/zip",
+    )
+    replace_response = parse_json(body)
+    session.ensure(
+        replace_response["status"] == "replaced",
+        "paper file replace should report replaced",
+    )
+    session.ensure(
+        replace_response["file_name"] == replacement_path.name,
+        "paper file replace should echo the uploaded file name",
+    )
+
+    session.validation_notes.append(
+        "Paper file replacement API covered invalid id, missing file, invalid zip, and appendix swap."
+    )
+    return replacement_path
 
 
 def run_real_theory_paper_flow(
@@ -589,6 +837,12 @@ def run_real_theory_paper_flow(
         real_question_ids,
     )
 
+    replaced_appendix_path = exercise_paper_file_replacement(
+        session,
+        appendix_paths,
+        paper_a_id,
+    )
+
     paper_bundle_path = session.downloads_dir / "papers_bundle_real_theory.zip"
     paper_manifest, paper_names = session.binary_json_request(
         "POST /papers/bundles (real theory)",
@@ -609,7 +863,7 @@ def run_real_theory_paper_flow(
         paper_bundle_path,
         {
             paper_a_id: {
-                "appendix_path": appendix_paths["mock-a"],
+                "appendix_path": replaced_appendix_path,
                 "title": "真实理论联考 A 卷（修订）",
                 "subtitle": "回归测试 终版",
                 "authors": ["张三", "赵八九"],
@@ -1017,7 +1271,7 @@ def run_ops_and_cleanup(
     )
 
     session.validation_notes.append(
-        "Synthetic question CRUD/filter coverage, real-theory and real-experiment paper bundle coverage, export, quality-check, and delete assertions all passed."
+        "Synthetic question CRUD/filter coverage, question/paper file replacement coverage, real-theory and real-experiment paper bundle coverage, export, quality-check, and delete assertions all passed."
     )
 
 
@@ -1067,7 +1321,11 @@ def main() -> None:
 
         session.print_step("[5/9] Run synthetic question CRUD and bundle checks")
         synthetic_question_ids, synthetic_question_by_slug = (
-            upload_and_patch_synthetic_questions(session, synthetic_zip_paths)
+            upload_and_patch_synthetic_questions(
+                session,
+                synthetic_zip_paths,
+                appendix_paths,
+            )
         )
 
         session.print_step(

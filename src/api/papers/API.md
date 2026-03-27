@@ -76,6 +76,29 @@ curl -X POST http://127.0.0.1:8080/papers \
 
 成功时返回更新后的完整试卷详情。
 
+### `PUT /papers/{paper_id}/file`
+
+使用 `multipart/form-data` 覆盖试卷当前的附加 zip 文件，只更新文件，不修改 metadata 或题目列表。
+
+- 字段名：`file`
+- 必须是合法 zip
+- 大小限制：20 MiB
+- 成功后会：
+  - 新写入一个 appendix object
+  - 更新 `append_object_id`
+  - 删除旧的 appendix object
+  - 更新 `updated_at`
+
+成功响应：
+
+```json
+{
+  "paper_id": "uuid",
+  "file_name": "paper_appendix_v2.zip",
+  "status": "replaced"
+}
+```
+
 ### `DELETE /papers/{paper_id}`
 
 删除试卷。

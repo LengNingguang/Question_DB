@@ -8,11 +8,13 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use mime_guess::MimeGuess;
-use sqlx::{query, PgPool, Postgres, Transaction};
+use sqlx::{query, PgPool, Postgres, QueryBuilder, Row, Transaction};
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use super::models::{NormalizedQuestionDifficulty, QuestionImportResponse};
+use super::models::{
+    NormalizedQuestionDifficulty, QuestionFileReplaceResponse, QuestionImportResponse,
+};
 
 pub(crate) const MAX_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
 const MAX_TOTAL_UNCOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
@@ -67,44 +69,7 @@ pub(crate) async fn import_question_zip(
     .await
     .context("insert uploaded question failed")?;
 
-    let tex_object_id = insert_object_tx(
-        &mut tx,
-        Path::new(&loaded.tex_file.path),
-        &loaded.tex_file.bytes,
-        Some("text/x-tex"),
-    )
-    .await?;
-    insert_question_file_tx(
-        &mut tx,
-        &question_id,
-        &tex_object_id,
-        "tex",
-        &loaded.tex_file.path,
-        Some("text/x-tex"),
-    )
-    .await?;
-
-    for asset in &loaded.asset_files {
-        let mime = MimeGuess::from_path(&asset.path)
-            .first_raw()
-            .map(str::to_string);
-        let object_id = insert_object_tx(
-            &mut tx,
-            Path::new(&asset.path),
-            &asset.bytes,
-            mime.as_deref(),
-        )
-        .await?;
-        insert_question_file_tx(
-            &mut tx,
-            &question_id,
-            &object_id,
-            "asset",
-            &asset.path,
-            mime.as_deref(),
-        )
-        .await?;
-    }
+    insert_loaded_question_files_tx(&mut tx, &question_id, &loaded).await?;
 
     for (algorithm_tag, value) in difficulty {
         query(
@@ -123,9 +88,63 @@ pub(crate) async fn import_question_zip(
 
     Ok(QuestionImportResponse {
         question_id,
-        file_name: file_name.unwrap_or("question.zip").to_string(),
+        file_name: normalize_upload_file_name(file_name),
         imported_assets: loaded.asset_files.len(),
         status: "imported",
+    })
+}
+
+pub(crate) async fn replace_question_zip(
+    pool: &PgPool,
+    question_id: &str,
+    file_name: Option<&str>,
+    zip_bytes: Vec<u8>,
+) -> Result<QuestionFileReplaceResponse> {
+    if zip_bytes.is_empty() {
+        bail!("uploaded file is empty");
+    }
+    if zip_bytes.len() > MAX_UPLOAD_BYTES {
+        bail!("uploaded zip exceeds 20 MiB limit");
+    }
+
+    let loaded = load_question_zip(&zip_bytes)?;
+    let normalized_file_name = normalize_upload_file_name(file_name);
+    let mut tx = pool
+        .begin()
+        .await
+        .context("begin question file replace tx failed")?;
+
+    let exists = query("SELECT 1 FROM questions WHERE question_id = $1::uuid")
+        .bind(question_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .context("check question existence failed")?
+        .is_some();
+    if !exists {
+        bail!("question not found: {question_id}");
+    }
+
+    replace_question_files_tx(&mut tx, question_id, &loaded).await?;
+
+    query(
+        "UPDATE questions SET source_tex_path = $2, updated_at = NOW() WHERE question_id = $1::uuid",
+    )
+    .bind(question_id)
+    .bind(&loaded.tex_file.path)
+    .execute(&mut *tx)
+    .await
+    .context("update question source tex path failed")?;
+
+    tx.commit()
+        .await
+        .context("commit question file replace failed")?;
+
+    Ok(QuestionFileReplaceResponse {
+        question_id: question_id.to_string(),
+        file_name: normalized_file_name,
+        source_tex_path: loaded.tex_file.path,
+        imported_assets: loaded.asset_files.len(),
+        status: "replaced",
     })
 }
 
@@ -265,6 +284,97 @@ fn register_parent_directories(directories: &mut BTreeSet<String>, path: &str) {
     for idx in 1..components.len() {
         directories.insert(components[..idx].join("/"));
     }
+}
+
+fn normalize_upload_file_name(file_name: Option<&str>) -> String {
+    file_name
+        .and_then(|value| Path::new(value).file_name())
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "question.zip".to_string())
+}
+
+async fn insert_loaded_question_files_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    question_id: &str,
+    loaded: &LoadedQuestionZip,
+) -> Result<()> {
+    let tex_object_id = insert_object_tx(
+        tx,
+        Path::new(&loaded.tex_file.path),
+        &loaded.tex_file.bytes,
+        Some("text/x-tex"),
+    )
+    .await?;
+    insert_question_file_tx(
+        tx,
+        question_id,
+        &tex_object_id,
+        "tex",
+        &loaded.tex_file.path,
+        Some("text/x-tex"),
+    )
+    .await?;
+
+    for asset in &loaded.asset_files {
+        let mime = MimeGuess::from_path(&asset.path)
+            .first_raw()
+            .map(str::to_string);
+        let object_id =
+            insert_object_tx(tx, Path::new(&asset.path), &asset.bytes, mime.as_deref()).await?;
+        insert_question_file_tx(
+            tx,
+            question_id,
+            &object_id,
+            "asset",
+            &asset.path,
+            mime.as_deref(),
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn replace_question_files_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    question_id: &str,
+    loaded: &LoadedQuestionZip,
+) -> Result<()> {
+    let old_object_ids = query(
+        "SELECT object_id::text AS object_id FROM question_files WHERE question_id = $1::uuid",
+    )
+    .bind(question_id)
+    .fetch_all(&mut **tx)
+    .await
+    .context("load existing question file objects failed")?
+    .into_iter()
+    .map(|row| row.get::<String, _>("object_id"))
+    .collect::<Vec<_>>();
+
+    query("DELETE FROM question_files WHERE question_id = $1::uuid")
+        .bind(question_id)
+        .execute(&mut **tx)
+        .await
+        .context("delete existing question files failed")?;
+
+    if !old_object_ids.is_empty() {
+        let mut builder = QueryBuilder::<Postgres>::new("DELETE FROM objects WHERE object_id IN (");
+        for (idx, object_id) in old_object_ids.iter().enumerate() {
+            if idx > 0 {
+                builder.push(", ");
+            }
+            builder.push_bind(object_id).push("::uuid");
+        }
+        builder.push(')');
+        builder
+            .build()
+            .execute(&mut **tx)
+            .await
+            .context("delete previous question file objects failed")?;
+    }
+
+    insert_loaded_question_files_tx(tx, question_id, loaded).await
 }
 
 async fn insert_object_tx(

@@ -19,4 +19,8 @@ pub(crate) fn router() -> Router<super::AppState> {
                 .patch(handlers::update_paper)
                 .delete(handlers::delete_paper),
         )
+        .route(
+            "/papers/:paper_id/file",
+            axum::routing::put(handlers::replace_paper_file),
+        )
 }

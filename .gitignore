@@ -1,0 +1,7 @@
+/target/
+*.log
+.env
+.env.*
+!.env.example
+/tmp
+__pycache__
